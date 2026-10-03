@@ -5,6 +5,7 @@ import { useApp } from '../context';
 import { Icon, Loading, Field, Modal, Badge, Spinner, fmtNum, useDebounced } from '../components/ui';
 import SegmentBuilder from '../components/SegmentBuilder';
 import ImageModal from '../components/ImageModal';
+import { placementIndexes } from '../placement';
 import { checkContent } from '../contentCheck';
 
 const LEVEL = { pass: ['green', '✓'], warn: ['amber', '!'], fail: ['red', '✕'], tip: ['blue', 'i'] };
@@ -100,19 +101,18 @@ export default function CampaignEditor() {
   const insertTag = (tag) => insertText(`{{${tag}}}`);
   const openImagePicker = () => {
     const el = htmlRef.current;
-    if (el) {
-      // If the user hasn't clicked into the HTML, put the image at the top of the content (above the first
-      // heading, where banners usually go), else right after <body>, else at the very start.
-      const untouched = document.activeElement !== el && el.selectionStart === 0;
-      let at = null;
-      if (untouched) {
-        const h = c.html.search(/<h[1-3][\s>]/i);
-        const body = c.html.match(/<body[^>]*>/i);
-        at = h >= 0 ? h : body ? body.index + body[0].length : 0;
-      }
-      cursor.current = at === null ? { start: el.selectionStart, end: el.selectionEnd } : { start: at, end: at };
-    }
+    // A cursor counts only if the user actually clicked into the HTML box.
+    const hasCursor = !!el && (document.activeElement === el || el.selectionStart > 0);
+    cursor.current = hasCursor ? { start: el.selectionStart, end: el.selectionEnd, real: true } : null;
     setModal('image');
+  };
+  const insertImages = (html, count, placement) => {
+    let at = null;
+    if (placement !== 'cursor' || !cursor.current?.real) at = placementIndexes(c.html)[placement === 'cursor' ? 'top' : placement];
+    if (at !== null && at !== undefined) cursor.current = { start: at, end: at };
+    insertText(html);
+    setModal(null);
+    toast(count > 1 ? `${count} images inserted` : 'Image inserted', 'success');
   };
 
   const flush = async () => (dirty.current ? save(payload) : true);
@@ -351,7 +351,7 @@ export default function CampaignEditor() {
       )}
 
       {modal === 'image' && (
-        <ImageModal onClose={() => { cursor.current = null; setModal(null); }} onInsert={(html) => { insertText(html); setModal(null); toast('Image inserted', 'success'); }} />
+        <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onClose={() => { cursor.current = null; setModal(null); }} onInsert={insertImages} />
       )}
 
       {modal === 'saveTpl' && (

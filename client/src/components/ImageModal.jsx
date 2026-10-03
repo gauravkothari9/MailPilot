@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { Modal, Icon, Field, Spinner, Tabs, useConfirm } from './ui';
+import { Modal, Icon, Field, Spinner, Tabs, Badge, useConfirm } from './ui';
+import { imagesHtml, CONTENT_WIDTH } from '../imageHtml';
+import { PLACEMENTS } from '../placement';
 
 const MAX_MB = 4;
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const MAX_FILES = 30;
 const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+const niceAlt = (name = '') => name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
 
 function naturalSize(src) {
   return new Promise((resolve) => {
@@ -16,85 +19,135 @@ function naturalSize(src) {
   });
 }
 
-/** Email-safe image HTML: fixed width attribute, fluid on mobile, optional tracked link. */
-export function imageHtml({ url, alt, width, full, align, link }) {
-  const margin = align === 'center' ? 'margin:0 auto;' : align === 'right' ? 'margin-left:auto;' : '';
-  const style = `display:block;border:0;outline:none;text-decoration:none;height:auto;max-width:100%;${full ? 'width:100%;' : ''}${margin}`;
-  const img = `<img src="${esc(url)}" alt="${esc(alt)}" width="${full ? '100%' : Math.round(width)}" style="${style}" />`;
-  const inner = link ? `<a href="${esc(link)}" target="_blank" style="text-decoration:none;">${img}</a>` : img;
-  return `\n<div style="margin:0 0 16px;text-align:${align};">${inner}</div>\n`;
-}
-
-export default function ImageModal({ onInsert, onClose }) {
+export default function ImageModal({ onInsert, onClose, hasCursor = false, spots = {} }) {
   const { businessId, toast } = useApp();
   const [tab, setTab] = useState('upload');
   const [library, setLibrary] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState([]); // ordered list of image objects
+  const [uploads, setUploads] = useState([]); // [{ name, status, error }]
   const [over, setOver] = useState(false);
-  const [picked, setPicked] = useState(null); // { url, name, width, height }
-  const [opts, setOpts] = useState({ alt: '', width: 560, full: false, align: 'center', link: '' });
+  const [step, setStep] = useState('pick'); // pick | settings
+  const [items, setItems] = useState([]); // [{ url, name, width, height, mime, alt, link }]
+  const [opts, setOpts] = useState({ layout: 'stack', width: CONTENT_WIDTH, full: false, align: 'center' });
   const [linkUrl, setLinkUrl] = useState('');
+  const [placement, setPlacement] = useState(hasCursor ? 'cursor' : 'top');
+  const [busy, setBusy] = useState(false);
   const [confirm, dialog] = useConfirm();
   const input = useRef();
+  const uploading = uploads.some((u) => u.status === 'uploading' || u.status === 'waiting');
 
-  const loadLibrary = () => api.get(`/businesses/${businessId}/images`).then(setLibrary).catch((e) => toast(e.message, 'error'));
-  useEffect(() => { loadLibrary(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    api.get(`/businesses/${businessId}/images`).then(setLibrary).catch((e) => toast(e.message, 'error'));
+  }, [businessId, toast]);
 
-  const pick = (img) => {
-    setPicked(img);
-    const natural = img.width || 560;
-    setOpts((o) => ({ ...o, alt: o.alt || img.name?.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') || '', width: Math.min(natural, 560) }));
+  const isSelected = (img) => selected.some((s) => s.url === img.url);
+  const toggle = (img) => setSelected((s) => (s.some((x) => x.url === img.url) ? s.filter((x) => x.url !== img.url) : [...s, img]));
+
+  const goToSettings = (list) => {
+    setItems(list.map((img) => ({ ...img, alt: niceAlt(img.name), link: '' })));
+    const minNatural = Math.min(...list.map((i) => i.width || CONTENT_WIDTH));
+    setOpts((o) => ({ ...o, layout: list.length > 1 ? 'grid2' : 'stack', width: Math.min(minNatural, CONTENT_WIDTH) }));
+    setStep('settings');
   };
 
-  const uploadFile = async (file) => {
-    if (!file) return;
-    if (!/^image\/(jpeg|png|gif|webp)$/.test(file.type)) return toast('Use a JPG, PNG, GIF or WebP image', 'error');
-    if (file.size > MAX_MB * 1048576) return toast(`Image is ${kb(file.size)}; the limit is ${MAX_MB} MB. Compress it first (e.g. tinypng.com).`, 'error');
-    setBusy(true);
-    try {
-      const objectUrl = URL.createObjectURL(file);
-      const dims = await naturalSize(objectUrl);
-      URL.revokeObjectURL(objectUrl);
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('width', dims.width);
-      fd.append('height', dims.height);
-      const img = await api.post(`/businesses/${businessId}/images`, fd);
-      setLibrary((l) => [img, ...(l || [])]);
-      pick(img);
-    } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+  const uploadFiles = async (fileList) => {
+    let files = [...(fileList || [])];
+    if (!files.length) return;
+    if (files.length > MAX_FILES) {
+      toast(`Up to ${MAX_FILES} images at a time. Uploading the first ${MAX_FILES}.`, 'error');
+      files = files.slice(0, MAX_FILES);
+    }
+    const status = files.map((f) => {
+      if (!/^image\/(jpeg|png|gif|webp)$/.test(f.type)) return { name: f.name, status: 'error', error: 'Not a JPG, PNG, GIF or WebP' };
+      if (f.size > MAX_MB * 1048576) return { name: f.name, status: 'error', error: `${kb(f.size)}: over ${MAX_MB} MB` };
+      return { name: f.name, status: 'waiting' };
+    });
+    setUploads(status);
+    const done = [];
+    // One at a time: each request must stay under the hosting upload limit.
+    for (let i = 0; i < files.length; i++) {
+      if (status[i].status === 'error') continue;
+      setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)));
+      try {
+        const objectUrl = URL.createObjectURL(files[i]);
+        const dims = await naturalSize(objectUrl);
+        URL.revokeObjectURL(objectUrl);
+        const fd = new FormData();
+        fd.append('file', files[i]);
+        fd.append('width', dims.width);
+        fd.append('height', dims.height);
+        const img = await api.post(`/businesses/${businessId}/images`, fd);
+        done.push(img);
+        setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'done' } : x)));
+      } catch (e) {
+        setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'error', error: e.message } : x)));
+      }
+    }
+    if (done.length) {
+      setLibrary((l) => [...done.slice().reverse(), ...(l || [])]);
+      setSelected((s) => [...s, ...done.filter((d) => !s.some((x) => x.url === d.url))]);
+      toast(`${done.length} image${done.length > 1 ? 's' : ''} uploaded and selected`, 'success');
+    }
   };
 
-  const useLink = async (e) => {
+  const addLink = async (e) => {
     e.preventDefault();
     if (!/^https:\/\/\S+$/i.test(linkUrl)) return toast('Image links must start with https://', 'error');
     setBusy(true);
     const dims = await naturalSize(linkUrl);
     setBusy(false);
     if (!dims.width) return toast('Could not load an image from that link', 'error');
-    pick({ url: linkUrl, name: linkUrl.split('/').pop(), ...dims });
+    const img = { url: linkUrl, name: decodeURIComponent(linkUrl.split('/').pop().split('?')[0]), ...dims };
+    if (!isSelected(img)) setSelected((s) => [...s, img]);
+    setLinkUrl('');
+    toast('Image added to your selection', 'success');
   };
 
   const remove = async (img) => {
     if (!(await confirm({ title: 'Delete image?', danger: true, confirmLabel: 'Delete', message: 'Emails already sent with this image will show a broken image. Only delete images you never sent.' }))) return;
     await api.del(`/images/${img._id}`);
     setLibrary((l) => l.filter((x) => x._id !== img._id));
+    setSelected((s) => s.filter((x) => x.url !== img.url));
   };
 
+  const setItem = (i, patch) => setItems((list) => list.map((it, j) => (j === i ? { ...it, ...patch } : it)));
+  const move = (i, d) => setItems((list) => {
+    const next = [...list];
+    [next[i], next[i + d]] = [next[i + d], next[i]];
+    return next;
+  });
+
   const insert = () => {
-    if (opts.link && !/^(https?:\/\/|mailto:)/i.test(opts.link)) return toast('Link must start with https://', 'error');
-    onInsert(imageHtml({ url: picked.url, ...opts }));
+    const bad = items.find((it) => it.link && !/^(https?:\/\/|mailto:)/i.test(it.link));
+    if (bad) return toast(`Link for “${bad.name}” must start with https://`, 'error');
+    onInsert(imagesHtml(items, opts), items.length, placement);
   };
 
   const set = (k) => (e) => setOpts({ ...opts, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const multi = items.length > 1;
+  const grid = multi && opts.layout !== 'stack';
+  const cols = opts.layout === 'grid3' ? 3 : 2;
+
+  const pickFooter = (
+    <>
+      <span className="small muted" style={{ marginRight: 'auto' }}>{selected.length ? `${selected.length} selected` : 'Select one or more images'}</span>
+      {selected.length > 0 && <button className="btn" onClick={() => setSelected([])}>Clear</button>}
+      <button className="btn btn-primary" disabled={!selected.length || uploading} onClick={() => goToSettings(selected)}>
+        Next{selected.length > 1 ? `: arrange ${selected.length} images` : ''}
+      </button>
+    </>
+  );
+  const settingsFooter = (
+    <>
+      <button className="btn" onClick={() => setStep('pick')}>Back</button>
+      <button className="btn btn-primary" onClick={insert}><Icon name="plus" />Insert {multi ? `${items.length} images` : 'image'}</button>
+    </>
+  );
 
   return (
-    <Modal title={picked ? 'Image settings' : 'Insert image'} onClose={onClose} wide
-      footer={picked && <>
-        <button className="btn" onClick={() => setPicked(null)}>Back</button>
-        <button className="btn btn-primary" onClick={insert}><Icon name="plus" />Insert into email</button>
-      </>}>
-      {!picked ? (
+    <Modal title={step === 'settings' ? (multi ? `Arrange ${items.length} images` : 'Image settings') : 'Insert images'} onClose={onClose} wide
+      footer={step === 'settings' ? settingsFooter : pickFooter}>
+      {step === 'pick' ? (
         <>
           <Tabs value={tab} onChange={setTab} tabs={[
             { value: 'upload', label: 'Upload' },
@@ -104,67 +157,138 @@ export default function ImageModal({ onInsert, onClose }) {
           <div style={{ height: 16 }} />
 
           {tab === 'upload' && (
-            <div className={`dropzone ${over ? 'over' : ''}`} onClick={() => input.current.click()}
-              onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
-              onDrop={(e) => { e.preventDefault(); setOver(false); uploadFile(e.dataTransfer.files[0]); }}>
-              {busy ? <Spinner /> : <Icon name="upload" />}
-              <h3 style={{ marginTop: 10 }}>{busy ? 'Uploading…' : 'Drop an image here or click to choose'}</h3>
-              <p className="muted small">JPG, PNG, GIF or WebP · up to {MAX_MB} MB · best width 600–1200 px</p>
-              <input ref={input} type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden onChange={(e) => uploadFile(e.target.files[0])} />
-            </div>
+            <>
+              <div className={`dropzone ${over ? 'over' : ''}`} onClick={() => !uploading && input.current.click()}
+                onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+                onDrop={(e) => { e.preventDefault(); setOver(false); if (!uploading) uploadFiles(e.dataTransfer.files); }}>
+                {uploading ? <Spinner /> : <Icon name="upload" />}
+                <h3 style={{ marginTop: 10 }}>{uploading ? 'Uploading…' : 'Drop images here or click to choose'}</h3>
+                <p className="muted small">Select several at once · JPG, PNG, GIF or WebP · up to {MAX_MB} MB each · max {MAX_FILES} per batch</p>
+                <input ref={input} type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp" hidden
+                  onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+              </div>
+              {uploads.length > 0 && (
+                <ul className="upload-list">
+                  {uploads.map((u, i) => (
+                    <li key={i}>
+                      <span className="truncate">{u.name}</span>
+                      {u.status === 'waiting' && <span className="muted small">waiting</span>}
+                      {u.status === 'uploading' && <Spinner />}
+                      {u.status === 'done' && <Badge color="green">✓ uploaded</Badge>}
+                      {u.status === 'error' && <Badge color="red" title={u.error}>✕ {u.error}</Badge>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!uploading && uploads.some((u) => u.status === 'done') && (
+                <p className="small muted">Uploaded images are selected. Click <b>Next</b> to arrange them, or open the library to add more.</p>
+              )}
+            </>
           )}
 
           {tab === 'library' && (
             !library ? <Spinner /> : library.length ? (
-              <div className="img-grid">
-                {library.map((img) => (
-                  <div key={img._id} className="img-tile">
-                    <button className="img-thumb" onClick={() => pick(img)} title="Use this image"><img src={img.url} alt={img.name} loading="lazy" /></button>
-                    <div className="img-meta">
-                      <span className="truncate small" title={img.name}>{img.name}</span>
-                      <button className="btn btn-sm btn-ghost btn-danger" onClick={() => remove(img)} aria-label="Delete image"><Icon name="trash" /></button>
-                    </div>
-                    <div className="small muted">{img.width ? `${img.width}×${img.height} · ` : ''}{kb(img.size)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : <div className="empty small">No images yet. Upload one and it will be saved here for reuse.</div>
+              <>
+                <div className="row" style={{ marginBottom: 10 }}>
+                  <span className="small muted">Click images to select them. They're inserted in the order you pick.</span>
+                  <span className="spacer" />
+                  <button className="btn btn-sm" onClick={() => setSelected(library)}>Select all</button>
+                </div>
+                <div className="img-grid">
+                  {library.map((img) => {
+                    const n = selected.findIndex((s) => s.url === img.url);
+                    return (
+                      <div key={img._id} className={`img-tile ${n >= 0 ? 'on' : ''}`}>
+                        <button className="img-thumb" onClick={() => toggle(img)} aria-pressed={n >= 0} title={n >= 0 ? 'Unselect' : 'Select'}>
+                          <img src={img.url} alt={img.name} loading="lazy" />
+                          {n >= 0 && <span className="img-check">{n + 1}</span>}
+                        </button>
+                        <div className="img-meta">
+                          <span className="truncate small" title={img.name}>{img.name}</span>
+                          <button className="btn btn-sm btn-ghost btn-danger" onClick={() => remove(img)} aria-label="Delete image"><Icon name="trash" /></button>
+                        </div>
+                        <div className="small muted">{img.width ? `${img.width}×${img.height} · ` : ''}{kb(img.size)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : <div className="empty small">No images yet. Upload some and they'll be saved here for reuse.</div>
           )}
 
           {tab === 'link' && (
-            <form onSubmit={useLink}>
-              <Field label="Image address" hint="Must be a public https:// link that ends in an image (e.g. from your website)">
+            <form onSubmit={addLink}>
+              <Field label="Image address" hint="A public https:// link to an image (e.g. from your website). Add as many as you like.">
                 <input type="url" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://example.com/banner.jpg" autoFocus />
               </Field>
-              <button className="btn btn-primary" disabled={busy}>{busy ? <Spinner /> : 'Use this image'}</button>
+              <button className="btn" disabled={busy}>{busy ? <Spinner /> : <><Icon name="plus" />Add to selection</>}</button>
             </form>
           )}
         </>
       ) : (
         <div className="img-settings">
-          <div className="img-preview" style={{ textAlign: opts.align }}>
-            <img src={picked.url} alt={opts.alt} style={{ width: opts.full ? '100%' : `${Math.min(opts.width, 560)}px`, maxWidth: '100%' }} />
+          <div>
+            <div className="img-preview">
+              <div className="img-preview-email" dangerouslySetInnerHTML={{ __html: imagesHtml(items, opts) }} />
+            </div>
+            <p className="small muted">Preview at email width. Galleries shrink to fit on phones.</p>
           </div>
           <div>
-            <Field label="Alt text" hint="Shown when images are blocked; helps deliverability and accessibility">
-              <input type="text" value={opts.alt} onChange={set('alt')} placeholder="e.g. Diwali sale banner" />
+            <Field label="Where to put it">
+              <select value={placement} onChange={(e) => setPlacement(e.target.value)}>
+                {PLACEMENTS.map(([k, label]) => {
+                  const unavailable = k === 'cursor' ? !hasCursor : spots[k] === null;
+                  return <option key={k} value={k} disabled={unavailable}>{label}{unavailable ? (k === 'cursor' ? ' (click in the HTML first)' : ' (not in this email)') : ''}</option>;
+                })}
+              </select>
             </Field>
-            <div className="form-row">
-              <Field label="Width (px)" hint={picked.width ? `Original: ${picked.width}px. Use 600 or less for email.` : undefined}>
-                <input type="number" min="20" max="1200" value={opts.width} onChange={set('width')} disabled={opts.full} />
-              </Field>
-              <label className="check" style={{ marginTop: 24 }}><input type="checkbox" checked={opts.full} onChange={set('full')} />Full width</label>
-            </div>
-            <div className="field">
-              <span className="label-text">Alignment</span>
-              <div className="seg">
-                {['left', 'center', 'right'].map((a) => <button type="button" key={a} className={opts.align === a ? 'active' : ''} onClick={() => setOpts({ ...opts, align: a })}>{a[0].toUpperCase() + a.slice(1)}</button>)}
+            {multi && (
+              <div className="field">
+                <span className="label-text">Layout</span>
+                <div className="seg">
+                  {[['stack', 'One below another'], ['grid2', '2 per row'], ['grid3', '3 per row']].map(([v, l]) => (
+                    <button type="button" key={v} className={opts.layout === v ? 'active' : ''} onClick={() => setOpts({ ...opts, layout: v })}>{l}</button>
+                  ))}
+                </div>
               </div>
+            )}
+            {!grid && (
+              <>
+                <div className="form-row">
+                  <Field label="Width (px)" hint="600 or less works best in email">
+                    <input type="number" min="20" max="1200" value={opts.width} onChange={set('width')} disabled={opts.full} />
+                  </Field>
+                  <label className="check" style={{ marginTop: 24 }}><input type="checkbox" checked={opts.full} onChange={set('full')} />Full width</label>
+                </div>
+                <div className="field">
+                  <span className="label-text">Alignment</span>
+                  <div className="seg">
+                    {['left', 'center', 'right'].map((a) => <button type="button" key={a} className={opts.align === a ? 'active' : ''} onClick={() => setOpts({ ...opts, align: a })}>{a[0].toUpperCase() + a.slice(1)}</button>)}
+                  </div>
+                </div>
+              </>
+            )}
+            {grid && <p className="small muted">Each image gets {Math.floor(100 / cols)}% of the row. Images with the same shape line up best.</p>}
+
+            <span className="label-text">{multi ? 'Each image' : 'Details'}</span>
+            <div className="img-items">
+              {items.map((it, i) => (
+                <div key={it.url} className="img-item">
+                  <img src={it.url} alt="" />
+                  <div className="img-item-fields">
+                    <input type="text" value={it.alt} onChange={(e) => setItem(i, { alt: e.target.value })} placeholder="Alt text (shown if images are blocked)" aria-label={`Alt text for ${it.name}`} />
+                    <input type="url" value={it.link} onChange={(e) => setItem(i, { link: e.target.value })} placeholder="Link when clicked (optional)" aria-label={`Link for ${it.name}`} />
+                  </div>
+                  {multi && (
+                    <div className="img-item-order">
+                      <button type="button" className="btn btn-sm btn-ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up">↑</button>
+                      <button type="button" className="btn btn-sm btn-ghost" disabled={i === items.length - 1} onClick={() => move(i, 1)} aria-label="Move down">↓</button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-            <Field label="Link when clicked (optional)" hint="Clicks are tracked like any other link">
-              <input type="url" value={opts.link} onChange={set('link')} placeholder="https://yourshop.com/sale" />
-            </Field>
-            {picked.mime === 'image/webp' && <div className="alert warn small">WebP doesn't show in some Outlook versions. JPG or PNG is safer for email.</div>}
+            {items.some((it) => it.mime === 'image/webp') && <div className="alert warn small" style={{ marginTop: 12 }}>WebP doesn't show in some Outlook versions. JPG or PNG is safer for email.</div>}
           </div>
         </div>
       )}
