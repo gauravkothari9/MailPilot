@@ -3,6 +3,7 @@ const { Sender, Business, Contact, Campaign, Message, Link, Event, getSetting } 
 const { decrypt, randomToken } = require('./security');
 const { audienceQuery } = require('./audience');
 const { pickWinner } = require('./abtest');
+const { applyImageTags } = require('./imageTags');
 
 async function publicUrl() {
   const url = (await getSetting('public_url')) || process.env.PUBLIC_URL || `http://localhost:${process.env.PORT || 5000}`;
@@ -30,13 +31,33 @@ function contactVars(contact, business) {
   };
 }
 
+const MERGE_TAG = /\{\{\s*([\w.-]+)\s*(?:\|([^}]*))?\}\}/g;
+const tagValue = (vars, key, fallback) => (vars[key] !== undefined && vars[key] !== '' ? vars[key] : (fallback ?? '').trim());
+
 // {{tag}} or {{tag|fallback}}
 function mergeTags(text, vars, escape) {
-  return String(text || '').replace(/\{\{\s*([\w.-]+)\s*(?:\|([^}]*))?\}\}/g, (m, key, fallback) => {
+  return String(text || '').replace(MERGE_TAG, (m, key, fallback) => {
     const k = key.toLowerCase();
     if (k === 'unsubscribe_url') return m;
-    const v = vars[k] !== undefined && vars[k] !== '' ? vars[k] : (fallback ?? '').trim();
+    const v = tagValue(vars, k, fallback);
     return escape ? escapeHtml(v) : String(v);
+  });
+}
+
+/**
+ * Tags inside link/image addresses must be URL-safe ("New Zealand" → "New%20Zealand", "+" kept).
+ * A tag that starts the address (e.g. href="{{business_website}}") is the address itself, so it's left as is.
+ */
+function mergeUrlAttributes(html, vars) {
+  return html.replace(/(\s(?:src|href|background)\s*=\s*)(["'])(.*?)\2/gi, (m, pre, q, value) => {
+    if (!value.includes('{{')) return m;
+    const merged = value.replace(MERGE_TAG, (t, key, fallback, offset) => {
+      const k = key.toLowerCase();
+      if (k === 'unsubscribe_url') return t;
+      const v = String(tagValue(vars, k, fallback));
+      return escapeHtml(offset === 0 ? v : encodeURIComponent(v));
+    });
+    return pre + q + merged + q;
   });
 }
 
@@ -68,7 +89,9 @@ async function renderEmail(campaign, contact, business, { token = null, relative
   const unsubUrl = token ? `${base}/u/${token}` : `${base}/u/preview`;
 
   const subject = mergeTags(campaign.subject, vars, false);
-  let html = mergeTags(campaign.html, vars, true);
+  let html = await applyImageTags(campaign.html, business?._id, vars); // {{image:…}} first, it may contain [field]s
+  html = mergeUrlAttributes(html, vars);
+  html = mergeTags(html, vars, true);
   // Uploaded images are stored as /i/<id>.<ext>; emails need absolute URLs (the editor preview keeps them relative).
   if (!relativeAssets) html = html.replace(/(\s(?:src|href|background)\s*=\s*["'])\/i\//gi, `$1${base}/i/`);
 

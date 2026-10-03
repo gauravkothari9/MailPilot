@@ -178,3 +178,10 @@
 .img-item-fields { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .img-item-fields input { padding: 6px 9px; font-size: 13px; }
 .img-item-order { display: flex; flex-direction: column; }
+
+/* image tags */
+.tag-chip { display: block; width: 100%; margin-top: 6px; text-align: left; font: 500 11.5px ui-monospace, Consolas, monospace; background: var(--primary-soft); color: var(--primary); border: 1px solid #c7d2fe; border-radius: 6px; padding: 3px 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-chip:hover { background: #e0e7ff; }
+.tag-edit input { margin-top: 6px; padding: 3px 6px; font: 500 12px ui-monospace, Consolas, monospace; }
+.chip-image { display: inline-flex; align-items: center; gap: 5px; }
+.chip-image img { width: 18px; height: 18px; object-fit: cover; border-radius: 3px; }

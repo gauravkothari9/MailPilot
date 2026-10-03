@@ -24,6 +24,7 @@ export default function CampaignEditor() {
   const [fields, setFields] = useState([]);
   const [tags, setTags] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [images, setImages] = useState([]);
   const [preview, setPreview] = useState(null);
   const [audience, setAudience] = useState(null);
   const [saveState, setSaveState] = useState('saved');
@@ -46,6 +47,7 @@ export default function CampaignEditor() {
     api.get(`/businesses/${businessId}/lists`).then(setLists).catch(() => {});
     api.get(`/businesses/${businessId}/fields`).then(setFields).catch(() => {});
     api.get(`/businesses/${businessId}/tags`).then(setTags).catch(() => {});
+    api.get(`/businesses/${businessId}/images`).then(setImages).catch(() => {});
   }, [id, businessId, navigate, toast]);
 
   const update = (patch) => { dirty.current = true; setSaveState('unsaved'); setC((x) => ({ ...x, ...patch })); };
@@ -258,6 +260,21 @@ export default function CampaignEditor() {
               <button type="button" className="chip" onClick={() => insertTag('unsubscribe_url')}>{'{{unsubscribe_url}}'}</button>
             </div>
             <p className="small muted" style={{ marginTop: 0 }}>Fallback for empty values: <code>{'{{first_name|there}}'}</code></p>
+            {images.length > 0 && (
+              <>
+                <span className="label-text">Your images: click to insert at cursor</span>
+                <div className="chips" style={{ margin: '6px 0 6px' }}>
+                  {images.map((img) => (
+                    <button type="button" key={img._id} className="chip chip-image" title={img.name} onClick={() => insertText(`{{image:${img.tag}}}`)}>
+                      <img src={img.url} alt="" />{`{{image:${img.tag}}}`}
+                    </button>
+                  ))}
+                </div>
+                <p className="small muted" style={{ marginTop: 0 }}>
+                  Different image per contact: <code>{'{{image:banner_[country]|banner_default}}'}</code> picks <code>banner_norway</code>, <code>banner_new_zealand</code>… from the contact's country, else <code>banner_default</code>. Rename tags in <b>Insert image → Image library</b>.
+                </p>
+              </>
+            )}
             <textarea ref={htmlRef} className="code" value={c.html} onChange={(e) => update({ html: e.target.value })} spellCheck={false} aria-label="Email HTML" />
             <div className="row" style={{ marginTop: 10 }}>
               <label className="check"><input type="checkbox" checked={c.trackOpens} onChange={(e) => update({ trackOpens: e.target.checked })} />Track opens</label>
@@ -351,7 +368,7 @@ export default function CampaignEditor() {
       )}
 
       {modal === 'image' && (
-        <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onClose={() => { cursor.current = null; setModal(null); }} onInsert={insertImages} />
+        <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onLibraryChange={setImages} onClose={() => { cursor.current = null; setModal(null); }} onInsert={insertImages} />
       )}
 
       {modal === 'saveTpl' && (

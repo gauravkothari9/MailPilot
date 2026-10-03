@@ -9,7 +9,8 @@ const { wrap, oid, int, slug, escapeRegex, sendCsv, EMAIL_RE, HttpError } = requ
 const cleanTags = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(','))
   .map((t) => String(t).trim().toLowerCase()).filter(Boolean))];
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+// defParamCharset: read file names as UTF-8 so accented names make correct list names.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, defParamCharset: 'utf8' });
 
 // ---------- lists ----------
 

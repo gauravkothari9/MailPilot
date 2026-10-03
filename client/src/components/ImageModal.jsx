@@ -19,7 +19,7 @@ function naturalSize(src) {
   });
 }
 
-export default function ImageModal({ onInsert, onClose, hasCursor = false, spots = {} }) {
+export default function ImageModal({ onInsert, onClose, hasCursor = false, spots = {}, onLibraryChange }) {
   const { businessId, toast } = useApp();
   const [tab, setTab] = useState('upload');
   const [library, setLibrary] = useState(null);
@@ -33,7 +33,10 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
   const [placement, setPlacement] = useState(hasCursor ? 'cursor' : 'top');
   const [busy, setBusy] = useState(false);
   const [confirm, dialog] = useConfirm();
+  const [renaming, setRenaming] = useState(null); // { id, value }
   const input = useRef();
+  // Keep the editor's image chips in sync with uploads, renames and deletes.
+  useEffect(() => { if (library) onLibraryChange?.(library); }, [library]); // eslint-disable-line react-hooks/exhaustive-deps
   const uploading = uploads.some((u) => u.status === 'uploading' || u.status === 'waiting');
 
   useEffect(() => {
@@ -108,6 +111,20 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
     await api.del(`/images/${img._id}`);
     setLibrary((l) => l.filter((x) => x._id !== img._id));
     setSelected((s) => s.filter((x) => x.url !== img.url));
+  };
+
+  const copyTag = async (img) => {
+    const text = `{{image:${img.tag}}}`;
+    try { await navigator.clipboard.writeText(text); toast(`Copied ${text}`, 'success'); } catch { toast(text); }
+  };
+  const saveTag = async (img, value) => {
+    setRenaming(null);
+    if (!value || value === img.tag) return;
+    try {
+      const updated = await api.put(`/images/${img._id}`, { tag: value });
+      setLibrary((l) => l.map((x) => (x._id === img._id ? { ...x, tag: updated.tag } : x)));
+      toast(`Renamed to {{image:${updated.tag}}}`, 'success');
+    } catch (e) { toast(e.message, 'error'); }
   };
 
   const setItem = (i, patch) => setItems((list) => list.map((it, j) => (j === i ? { ...it, ...patch } : it)));
@@ -203,8 +220,20 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
                           <img src={img.url} alt={img.name} loading="lazy" />
                           {n >= 0 && <span className="img-check">{n + 1}</span>}
                         </button>
+                        {renaming?.id === img._id ? (
+                          <form className="tag-edit" onSubmit={(e) => { e.preventDefault(); saveTag(img, renaming.value); }}>
+                            <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value })} onBlur={() => saveTag(img, renaming.value)}
+                              onKeyDown={(e) => e.key === 'Escape' && setRenaming(null)} aria-label="Image tag name" />
+                          </form>
+                        ) : (
+                          <button type="button" className="tag-chip" title="Click to copy · double-click to rename"
+                            onClick={() => copyTag(img)} onDoubleClick={() => setRenaming({ id: img._id, value: img.tag })}>
+                            {`{{image:${img.tag}}}`}
+                          </button>
+                        )}
                         <div className="img-meta">
                           <span className="truncate small" title={img.name}>{img.name}</span>
+                          <button className="btn btn-sm btn-ghost" onClick={() => setRenaming({ id: img._id, value: img.tag })} aria-label="Rename tag" title="Rename tag"><Icon name="edit" /></button>
                           <button className="btn btn-sm btn-ghost btn-danger" onClick={() => remove(img)} aria-label="Delete image"><Icon name="trash" /></button>
                         </div>
                         <div className="small muted">{img.width ? `${img.width}×${img.height} · ` : ''}{kb(img.size)}</div>

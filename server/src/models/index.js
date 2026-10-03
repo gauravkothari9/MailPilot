@@ -154,16 +154,20 @@ const Template = model('Template', new Schema({
 
 // Images used inside emails. Stored in MongoDB so they are backed up with everything else
 // and survive redeploys; served publicly at /i/<id>.<ext>.
-const Image = model('Image', new Schema({
+const imageSchema = new Schema({
   business: { ...ref('Business'), required: true, index: true },
   name: String,
+  // Merge-tag name, e.g. "logo" for {{image:logo}}. Auto-generated from the file name, editable.
+  tag: String,
   mime: { type: String, required: true },
   ext: { type: String, required: true },
   size: Number,
   width: Number,
   height: Number,
   data: { type: Buffer, required: true, select: false },
-}, opts));
+}, opts);
+imageSchema.index({ business: 1, tag: 1 });
+const Image = model('Image', imageSchema);
 
 async function getSetting(key, fallback = null) {
   const s = await Setting.findOne({ key }).lean();

@@ -3,10 +3,12 @@ const express = require('express');
 const multer = require('multer');
 const { Image } = require('../models');
 const { wrap, oid, HttpError } = require('../utils');
+const { uniqueTag, tagSlug, invalidateImages } = require('../services/imageTags');
 
 // Vercel forwards request bodies up to ~4.5 MB, so keep uploads under that.
 const MAX_BYTES = 4 * 1024 * 1024;
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES } });
+// defParamCharset: read file names as UTF-8 ("côte.png" would otherwise arrive as "cÃ´te.png").
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES }, defParamCharset: 'utf8' });
 
 /** Identify the real file type from its first bytes (never trust the browser's mimetype). SVG is refused: it can carry scripts. */
 function sniff(buf) {
@@ -19,7 +21,7 @@ function sniff(buf) {
 }
 
 const toJson = (img) => ({
-  _id: img._id, name: img.name, mime: img.mime, size: img.size, width: img.width, height: img.height, createdAt: img.createdAt,
+  _id: img._id, name: img.name, tag: img.tag, mime: img.mime, size: img.size, width: img.width, height: img.height, createdAt: img.createdAt,
   url: `/i/${img._id}.${img.ext}`,
 });
 
@@ -27,8 +29,29 @@ const toJson = (img) => ({
 const api = express.Router();
 
 api.get('/businesses/:bid/images', wrap(async (req, res) => {
-  const rows = await Image.find({ business: oid(req.params.bid) }).sort({ createdAt: -1 }).lean();
+  const business = oid(req.params.bid);
+  const rows = await Image.find({ business }).sort({ createdAt: -1 }).lean();
+  // Images uploaded before tags existed get one now (oldest first, so names stay stable).
+  const untagged = rows.filter((r) => !r.tag).reverse();
+  for (const r of untagged) {
+    r.tag = await uniqueTag(business, (r.name || 'image').replace(/\.[^.]+$/, ''));
+    await Image.updateOne({ _id: r._id }, { tag: r.tag });
+  }
+  if (untagged.length) invalidateImages(business);
   res.json(rows.map(toJson));
+}));
+
+// Rename an image's tag. Emails already sent keep working (they use the image address, not the tag).
+api.put('/images/:id', wrap(async (req, res) => {
+  const img = await Image.findById(oid(req.params.id)).lean();
+  if (!img) throw new HttpError(404, 'Image not found');
+  const wanted = tagSlug(req.body.tag);
+  if (!wanted) throw new HttpError(400, 'Use letters, numbers and underscores, e.g. logo or banner_norway');
+  const clash = await Image.exists({ business: img.business, tag: wanted, _id: { $ne: img._id } });
+  if (clash) throw new HttpError(400, `Another image is already called "${wanted}"`);
+  await Image.updateOne({ _id: img._id }, { tag: wanted });
+  invalidateImages(img.business);
+  res.json({ ...toJson({ ...img, tag: wanted }) });
 }));
 
 api.post('/businesses/:bid/images', (req, res, next) => {
@@ -40,18 +63,22 @@ api.post('/businesses/:bid/images', (req, res, next) => {
   if (!req.file) throw new HttpError(400, 'Choose an image file');
   const type = sniff(req.file.buffer);
   if (!type) throw new HttpError(400, 'Only JPG, PNG, GIF or WebP images are supported');
+  const business = oid(req.params.bid);
+  const name = String(req.file.originalname || 'image').slice(0, 200);
   const img = await Image.create({
-    business: oid(req.params.bid),
-    name: String(req.file.originalname || 'image').slice(0, 200),
+    business, name,
+    tag: await uniqueTag(business, name.replace(/\.[^.]+$/, '')),
     mime: type.mime, ext: type.ext, size: req.file.size,
     width: Number(req.body.width) || undefined, height: Number(req.body.height) || undefined,
     data: req.file.buffer,
   });
+  invalidateImages(business);
   res.json(toJson(img));
 }));
 
 api.delete('/images/:id', wrap(async (req, res) => {
-  await Image.deleteOne({ _id: oid(req.params.id) });
+  const img = await Image.findByIdAndDelete(oid(req.params.id)).select('business').lean();
+  if (img) invalidateImages(img.business);
   res.json({ ok: true });
 }));
 
