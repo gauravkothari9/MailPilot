@@ -1,0 +1,24 @@
+# Dependencies & builds
+node_modules/
+client/dist/
+
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private data: contact spreadsheets, database exports, deployment state
+Mail/
+*.xlsx
+*.xls
+*.csv
+deploy/mailpilot-data.json
+deploy/aws-instance.json
+backups/
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db
