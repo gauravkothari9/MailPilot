@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useApp } from '../context';
 import { Icon, Loading, Field, Modal, Badge, Spinner, fmtNum, useDebounced } from '../components/ui';
 import SegmentBuilder from '../components/SegmentBuilder';
+import ImageModal from '../components/ImageModal';
 import { checkContent } from '../contentCheck';
 
 const LEVEL = { pass: ['green', '✓'], warn: ['amber', '!'], fail: ['red', '✕'], tip: ['blue', 'i'] };
@@ -85,14 +86,33 @@ export default function CampaignEditor() {
 
   const check = useMemo(() => c && checkContent({ subject: c.subject, preheader: c.preheader, html: c.html, subjectB: c.abTest?.subjectB, abEnabled: c.abTest?.enabled }), [c]);
 
-  const insertTag = (tag) => {
+  // Remembers the cursor so a modal (e.g. image picker) can insert where the user was typing.
+  const cursor = useRef(null);
+  const insertText = (text) => {
     const el = htmlRef.current;
-    const token = `{{${tag}}}`;
     if (!el) return;
-    const { selectionStart: s, selectionEnd: e } = el;
-    const html = c.html.slice(0, s) + token + c.html.slice(e);
-    update({ html });
-    requestAnimationFrame(() => { el.focus(); el.selectionStart = el.selectionEnd = s + token.length; });
+    const s = cursor.current?.start ?? el.selectionStart;
+    const e = cursor.current?.end ?? el.selectionEnd;
+    cursor.current = null;
+    update({ html: c.html.slice(0, s) + text + c.html.slice(e) });
+    requestAnimationFrame(() => { el.focus(); el.selectionStart = el.selectionEnd = s + text.length; });
+  };
+  const insertTag = (tag) => insertText(`{{${tag}}}`);
+  const openImagePicker = () => {
+    const el = htmlRef.current;
+    if (el) {
+      // If the user hasn't clicked into the HTML, put the image at the top of the content (above the first
+      // heading, where banners usually go), else right after <body>, else at the very start.
+      const untouched = document.activeElement !== el && el.selectionStart === 0;
+      let at = null;
+      if (untouched) {
+        const h = c.html.search(/<h[1-3][\s>]/i);
+        const body = c.html.match(/<body[^>]*>/i);
+        at = h >= 0 ? h : body ? body.index + body[0].length : 0;
+      }
+      cursor.current = at === null ? { start: el.selectionStart, end: el.selectionEnd } : { start: at, end: at };
+    }
+    setModal('image');
   };
 
   const flush = async () => (dirty.current ? save(payload) : true);
@@ -227,7 +247,10 @@ export default function CampaignEditor() {
           <section className="card card-pad">
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
               <h3 className="section-title" style={{ margin: 0 }}>3 · Content</h3>
-              <button className="btn btn-sm" onClick={() => { setModal('tpl'); api.get(`/businesses/${businessId}/templates`).then(setTemplates); }}><Icon name="template" />Templates</button>
+              <div className="row" style={{ gap: 6 }}>
+                <button className="btn btn-sm btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={openImagePicker}><Icon name="image" />Insert image</button>
+                <button className="btn btn-sm" onClick={() => { setModal('tpl'); api.get(`/businesses/${businessId}/templates`).then(setTemplates); }}><Icon name="template" />Templates</button>
+              </div>
             </div>
             <span className="label-text">Personalize: click to insert at cursor</span>
             <div className="chips" style={{ margin: '6px 0 10px' }}>
@@ -325,6 +348,10 @@ export default function CampaignEditor() {
             ))}
           </div>
         </Modal>
+      )}
+
+      {modal === 'image' && (
+        <ImageModal onClose={() => { cursor.current = null; setModal(null); }} onInsert={(html) => { insertText(html); setModal(null); toast('Image inserted', 'success'); }} />
       )}
 
       {modal === 'saveTpl' && (

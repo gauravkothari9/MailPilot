@@ -62,13 +62,15 @@ async function getLinkId(campaignId, url) {
  * Builds subject/html/text for one recipient with tracking injected.
  * token === null disables tracking (previews and test sends).
  */
-async function renderEmail(campaign, contact, business, { token = null } = {}) {
+async function renderEmail(campaign, contact, business, { token = null, relativeAssets = false } = {}) {
   const base = await publicUrl();
   const vars = contactVars(contact, business);
   const unsubUrl = token ? `${base}/u/${token}` : `${base}/u/preview`;
 
   const subject = mergeTags(campaign.subject, vars, false);
   let html = mergeTags(campaign.html, vars, true);
+  // Uploaded images are stored as /i/<id>.<ext>; emails need absolute URLs (the editor preview keeps them relative).
+  if (!relativeAssets) html = html.replace(/(\s(?:src|href|background)\s*=\s*["'])\/i\//gi, `$1${base}/i/`);
 
   const hasUnsub = /\{\{\s*unsubscribe_url\s*\}\}/i.test(html);
   html = html.replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, unsubUrl);

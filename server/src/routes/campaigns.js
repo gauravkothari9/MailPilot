@@ -129,7 +129,7 @@ router.post('/campaigns/:id/preview', wrap(async (req, res) => {
   for (const k of ['subject', 'preheader', 'html', 'audience']) if (req.body[k] !== undefined) c[k] = req.body[k];
   for (const k of ['list', 'sourceCampaign']) if (req.body[k]) c[k] = oid(req.body[k]);
   const [biz, contact] = await Promise.all([Business.findById(c.business).lean(), sampleContact(c)]);
-  const r = await mailer.renderEmail(c, contact, biz, { token: null });
+  const r = await mailer.renderEmail(c, contact, biz, { token: null, relativeAssets: true });
   res.json({ ...r, sampleEmail: contact.email, tags: Object.keys(mailer.contactVars(contact, biz)) });
 }));
 

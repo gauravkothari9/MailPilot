@@ -18,6 +18,7 @@ app.use(cookieParser());
 
 // Public (recipient-facing) tracking + unsubscribe routes.
 app.use(require('./routes/tracking'));
+app.use(require('./routes/images').pub);
 
 app.use('/api/auth', authRouter);
 app.use('/api', requireAuth,
@@ -25,6 +26,7 @@ app.use('/api', requireAuth,
   require('./routes/contacts'),
   require('./routes/campaigns'),
   require('./routes/templates'),
+  require('./routes/images').api,
   require('./routes/analytics'));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

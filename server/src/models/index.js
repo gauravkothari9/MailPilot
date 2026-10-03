@@ -152,6 +152,19 @@ const Template = model('Template', new Schema({
   html: { type: String, required: true },
 }, opts));
 
+// Images used inside emails. Stored in MongoDB so they are backed up with everything else
+// and survive redeploys; served publicly at /i/<id>.<ext>.
+const Image = model('Image', new Schema({
+  business: { ...ref('Business'), required: true, index: true },
+  name: String,
+  mime: { type: String, required: true },
+  ext: { type: String, required: true },
+  size: Number,
+  width: Number,
+  height: Number,
+  data: { type: Buffer, required: true, select: false },
+}, opts));
+
 async function getSetting(key, fallback = null) {
   const s = await Setting.findOne({ key }).lean();
   return s ? s.value : fallback;
@@ -161,4 +174,4 @@ async function setSetting(key, value) {
   await Setting.updateOne({ key }, { value }, { upsert: true });
 }
 
-module.exports = { User, Setting, Business, Sender, List, Contact, Campaign, Message, Link, Event, Template, getSetting, setSetting };
+module.exports = { User, Setting, Business, Sender, List, Contact, Campaign, Message, Link, Event, Template, Image, getSetting, setSetting };
