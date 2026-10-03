@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the app on this PC and ships it to the EC2 server. Run from Git Bash:
+# Ships the API server (no React client; that is hosted on Vercel) to the EC2 server. Run from Git Bash:
 #
 #   deploy/deploy.sh <server-ip> <path-to-key.pem>              # update code only
 #   deploy/deploy.sh <server-ip> <path-to-key.pem> --first-time # also sets up the server, .env and data
@@ -11,13 +11,10 @@ TARGET="ubuntu@$IP"
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "$TARGET")
 SCP=(scp -i "$KEY" -o StrictHostKeyChecking=accept-new)
 
-echo "==> Building the React app"
-(cd "$ROOT/client" && npx vite build >/dev/null)
-
 echo "==> Packaging"
 PKG="$(mktemp -d)/mailpilot.tgz"
 tar -czf "$PKG" -C "$ROOT" --exclude='node_modules' --exclude='server/.env' --exclude='server/scripts/*.json' \
-  package.json server client/dist
+  package.json server
 
 if [[ "$MODE" == "--first-time" ]]; then
   echo "==> Server setup (Node, MongoDB, Nginx, firewall, backups) - takes a few minutes"
@@ -45,6 +42,7 @@ fi
 echo "==> Uploading and installing"
 "${SCP[@]}" "$PKG" "$TARGET:/tmp/mailpilot.tgz"
 "${SSH[@]}" "set -e
+  rm -rf /opt/mailpilot/client   # client lives on Vercel
   tar -xzf /tmp/mailpilot.tgz -C /opt/mailpilot
   cd /opt/mailpilot/server && npm ci --omit=dev --no-audit --no-fund >/dev/null"
 

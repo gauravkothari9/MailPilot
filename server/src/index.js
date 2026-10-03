@@ -28,11 +28,14 @@ app.use('/api', requireAuth,
   require('./routes/analytics'));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-// Serve the built React app in production.
+// The React client is hosted separately (Vercel). If a build is present locally it is still served,
+// which keeps `npm start` working as a single app for local use.
 const dist = path.join(__dirname, '..', '..', 'client', 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
   app.get('*', (req, res) => res.sendFile(path.join(dist, 'index.html')));
+} else {
+  app.get('/', (req, res) => res.json({ service: 'MailPilot API', status: 'ok' }));
 }
 
 app.use((err, req, res, next) => {
