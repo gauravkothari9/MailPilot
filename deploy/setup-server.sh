@@ -16,11 +16,13 @@ if ! node -v 2>/dev/null | grep -q '^v22'; then
 fi
 sudo npm install -g pm2
 
-echo "==> MongoDB 8.0"
+# MongoDB 8.0 refuses to start on Linux kernel >= 6.19 (SERVER-121912); current Ubuntu 24.04
+# AWS images ship kernel 7.x, so use the 8.2 series (signed with the 8.0 key).
+echo "==> MongoDB 8.2"
 if ! command -v mongod >/dev/null; then
   curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/mongodb-server-8.0.gpg
-  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
-    | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list >/dev/null
+  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.2 multiverse" \
+    | sudo tee /etc/apt/sources.list.d/mongodb-org-8.2.list >/dev/null
   sudo apt-get update -y
   sudo apt-get install -y mongodb-org
 fi
@@ -49,7 +51,8 @@ sudo ufw --force enable
 echo "==> Daily database backup at 03:00, keeps 7 days"
 mkdir -p "$HOME/backups"
 CRON="0 3 * * * mongodump --db mailpilot --gzip --archive=$HOME/backups/mailpilot-\$(date +\\%F).gz && find $HOME/backups -name '*.gz' -mtime +7 -delete"
-( crontab -l 2>/dev/null | grep -v 'mongodump --db mailpilot' ; echo "$CRON" ) | crontab -
+# (a fresh server has no crontab yet, so tolerate the empty listing)
+{ { crontab -l 2>/dev/null || true; } | { grep -v 'mongodump --db mailpilot' || true; }; echo "$CRON"; } | crontab -
 
 echo "==> PM2 starts on boot"
 sudo env PATH="$PATH" pm2 startup systemd -u "$USER" --hp "$HOME" >/dev/null
