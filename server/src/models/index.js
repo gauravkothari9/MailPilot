@@ -157,6 +157,8 @@ const Template = model('Template', new Schema({
 const imageSchema = new Schema({
   business: { ...ref('Business'), required: true, index: true },
   name: String,
+  // 'image' (image library, has a merge tag) or 'file' (PDF, document… linked from buttons).
+  kind: { type: String, enum: ['image', 'file'], default: 'image' },
   // Merge-tag name, e.g. "logo" for {{image:logo}}. Auto-generated from the file name, editable.
   tag: String,
   mime: { type: String, required: true },

@@ -4,6 +4,7 @@ import { useApp } from '../context';
 import { Modal, Icon, Field, Spinner, Tabs, Badge, useConfirm } from './ui';
 import { imagesHtml, CONTENT_WIDTH } from '../imageHtml';
 import { PLACEMENTS } from '../placement';
+import LinkField, { validLink } from './LinkField';
 
 const MAX_MB = 4;
 const MAX_FILES = 30;
@@ -43,7 +44,6 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
     api.get(`/businesses/${businessId}/images`).then(setLibrary).catch((e) => toast(e.message, 'error'));
   }, [businessId, toast]);
 
-  const isSelected = (img) => selected.some((s) => s.url === img.url);
   const toggle = (img) => setSelected((s) => (s.some((x) => x.url === img.url) ? s.filter((x) => x.url !== img.url) : [...s, img]));
 
   const goToSettings = (list) => {
@@ -93,17 +93,25 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
     }
   };
 
+  // The server downloads the image and saves a copy in the library: the browser can't load many
+  // links (hotlink protection, share pages, http://), and emails shouldn't depend on another site.
   const addLink = async (e) => {
     e.preventDefault();
-    if (!/^https:\/\/\S+$/i.test(linkUrl)) return toast('Image links must start with https://', 'error');
+    const url = linkUrl.trim();
+    if (!/^https?:\/\/\S+$/i.test(url)) return toast('Paste a link starting with https://', 'error');
     setBusy(true);
-    const dims = await naturalSize(linkUrl);
-    setBusy(false);
-    if (!dims.width) return toast('Could not load an image from that link', 'error');
-    const img = { url: linkUrl, name: decodeURIComponent(linkUrl.split('/').pop().split('?')[0]), ...dims };
-    if (!isSelected(img)) setSelected((s) => [...s, img]);
-    setLinkUrl('');
-    toast('Image added to your selection', 'success');
+    try {
+      const img = await api.post(`/businesses/${businessId}/images/from-url`, { url });
+      setLibrary((l) => [img, ...(l || [])]);
+      setSelected((s) => [...s, img]);
+      setLinkUrl('');
+      toast('Image saved to your library and selected', 'success');
+    } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  };
+
+  const copyUrl = async (img) => {
+    const text = new URL(img.url, window.location.origin).href;
+    try { await navigator.clipboard.writeText(text); toast('Image address copied', 'success'); } catch { toast(text); }
   };
 
   const remove = async (img) => {
@@ -135,8 +143,8 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
   });
 
   const insert = () => {
-    const bad = items.find((it) => it.link && !/^(https?:\/\/|mailto:)/i.test(it.link));
-    if (bad) return toast(`Link for “${bad.name}” must start with https://`, 'error');
+    const bad = items.find((it) => it.link && !validLink(it.link));
+    if (bad) return toast(`Link for “${bad.name}” must start with https://, or choose a file`, 'error');
     onInsert(imagesHtml(items, opts), items.length, placement);
   };
 
@@ -233,6 +241,7 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
                         )}
                         <div className="img-meta">
                           <span className="truncate small" title={img.name}>{img.name}</span>
+                          <button className="btn btn-sm btn-ghost" onClick={() => copyUrl(img)} aria-label="Copy image address" title="Copy image address"><Icon name="link" /></button>
                           <button className="btn btn-sm btn-ghost" onClick={() => setRenaming({ id: img._id, value: img.tag })} aria-label="Rename tag" title="Rename tag"><Icon name="edit" /></button>
                           <button className="btn btn-sm btn-ghost btn-danger" onClick={() => remove(img)} aria-label="Delete image"><Icon name="trash" /></button>
                         </div>
@@ -247,10 +256,11 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
 
           {tab === 'link' && (
             <form onSubmit={addLink}>
-              <Field label="Image address" hint="A public https:// link to an image (e.g. from your website). Add as many as you like.">
+              <Field label="Image address" hint="A public link to a JPG, PNG, GIF or WebP image (up to 10 MB). Google Drive and Dropbox share links work too. A copy is saved to your image library, so the email keeps working if the other site changes.">
                 <input type="url" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://example.com/banner.jpg" autoFocus />
               </Field>
-              <button className="btn" disabled={busy}>{busy ? <Spinner /> : <><Icon name="plus" />Add to selection</>}</button>
+              <button className="btn" disabled={busy}>{busy ? <><Spinner />Downloading…</> : <><Icon name="plus" />Add to selection</>}</button>
+              <p className="small muted">Tip: on a web page, right-click the image and choose <b>Copy image address</b>. A link to the page itself won't work.</p>
             </form>
           )}
         </>
@@ -306,7 +316,7 @@ export default function ImageModal({ onInsert, onClose, hasCursor = false, spots
                   <img src={it.url} alt="" />
                   <div className="img-item-fields">
                     <input type="text" value={it.alt} onChange={(e) => setItem(i, { alt: e.target.value })} placeholder="Alt text (shown if images are blocked)" aria-label={`Alt text for ${it.name}`} />
-                    <input type="url" value={it.link} onChange={(e) => setItem(i, { link: e.target.value })} placeholder="Link when clicked (optional)" aria-label={`Link for ${it.name}`} />
+                    <LinkField value={it.link} onChange={(link) => setItem(i, { link })} placeholder="Link when clicked: https://… (optional)" ariaLabel={`Link for ${it.name}`} />
                   </div>
                   {multi && (
                     <div className="img-item-order">

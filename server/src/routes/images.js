@@ -1,36 +1,52 @@
-// Image library for email content: upload, list, delete (logged in) and public serving.
+// Image library and downloadable files for email content: upload, import from a link, list, delete
+// (logged in) and public serving.
 const express = require('express');
 const multer = require('multer');
 const { Image } = require('../models');
 const { wrap, oid, HttpError } = require('../utils');
 const { uniqueTag, tagSlug, invalidateImages } = require('../services/imageTags');
+const { sniffImage, imageSize, sniffFile } = require('../services/fileTypes');
+const { fetchRemote } = require('../services/fetchRemote');
 
 // Vercel forwards request bodies up to ~4.5 MB, so keep uploads under that.
 const MAX_BYTES = 4 * 1024 * 1024;
+// Links are downloaded by this server directly, so they aren't bound by the upload limit.
+const MAX_LINK_BYTES = 10 * 1024 * 1024;
 // defParamCharset: read file names as UTF-8 ("côte.png" would otherwise arrive as "cÃ´te.png").
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES }, defParamCharset: 'utf8' });
-
-/** Identify the real file type from its first bytes (never trust the browser's mimetype). SVG is refused: it can carry scripts. */
-function sniff(buf) {
-  if (buf.length < 12) return null;
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
-  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', ext: 'png' };
-  if (buf.subarray(0, 4).toString('ascii') === 'GIF8') return { mime: 'image/gif', ext: 'gif' };
-  if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
-  return null;
-}
+const single = (req, res, next) => upload.single('file')(req, res, (err) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return next(new HttpError(400, 'File is larger than 4 MB. Compress it (e.g. tinypng.com for images) and try again.'));
+  next(err);
+});
 
 const toJson = (img) => ({
-  _id: img._id, name: img.name, tag: img.tag, mime: img.mime, size: img.size, width: img.width, height: img.height, createdAt: img.createdAt,
+  _id: img._id, kind: img.kind || 'image', name: img.name, tag: img.tag, mime: img.mime, size: img.size, width: img.width, height: img.height, createdAt: img.createdAt,
   url: `/i/${img._id}.${img.ext}`,
 });
+
+const nameFromUrl = (url) => {
+  try { return decodeURIComponent(new URL(url).pathname.split('/').pop()) || 'image'; } catch { return 'image'; }
+};
+
+async function saveImage(business, name, buffer, type, dims) {
+  const size = dims?.width ? dims : imageSize(buffer, type.ext);
+  const img = await Image.create({
+    business, kind: 'image', name,
+    tag: await uniqueTag(business, name.replace(/\.[^.]+$/, '')),
+    mime: type.mime, ext: type.ext, size: buffer.length,
+    width: size.width || undefined, height: size.height || undefined,
+    data: buffer,
+  });
+  invalidateImages(business);
+  return img;
+}
 
 // ---------- logged-in API ----------
 const api = express.Router();
 
 api.get('/businesses/:bid/images', wrap(async (req, res) => {
   const business = oid(req.params.bid);
-  const rows = await Image.find({ business }).sort({ createdAt: -1 }).lean();
+  const rows = await Image.find({ business, kind: { $ne: 'file' } }).sort({ createdAt: -1 }).lean();
   // Images uploaded before tags existed get one now (oldest first, so names stay stable).
   const untagged = rows.filter((r) => !r.tag).reverse();
   for (const r of untagged) {
@@ -47,33 +63,54 @@ api.put('/images/:id', wrap(async (req, res) => {
   if (!img) throw new HttpError(404, 'Image not found');
   const wanted = tagSlug(req.body.tag);
   if (!wanted) throw new HttpError(400, 'Use letters, numbers and underscores, e.g. logo or banner_norway');
-  const clash = await Image.exists({ business: img.business, tag: wanted, _id: { $ne: img._id } });
+  const clash = await Image.exists({ business: img.business, kind: { $ne: 'file' }, tag: wanted, _id: { $ne: img._id } });
   if (clash) throw new HttpError(400, `Another image is already called "${wanted}"`);
   await Image.updateOne({ _id: img._id }, { tag: wanted });
   invalidateImages(img.business);
   res.json({ ...toJson({ ...img, tag: wanted }) });
 }));
 
-api.post('/businesses/:bid/images', (req, res, next) => {
-  upload.single('file')(req, res, (err) => {
-    if (err?.code === 'LIMIT_FILE_SIZE') return next(new HttpError(400, 'Image is larger than 4 MB. Compress it (e.g. tinypng.com) and try again.'));
-    next(err);
-  });
-}, wrap(async (req, res) => {
+api.post('/businesses/:bid/images', single, wrap(async (req, res) => {
   if (!req.file) throw new HttpError(400, 'Choose an image file');
-  const type = sniff(req.file.buffer);
+  const type = sniffImage(req.file.buffer);
   if (!type) throw new HttpError(400, 'Only JPG, PNG, GIF or WebP images are supported');
-  const business = oid(req.params.bid);
   const name = String(req.file.originalname || 'image').slice(0, 200);
-  const img = await Image.create({
-    business, name,
-    tag: await uniqueTag(business, name.replace(/\.[^.]+$/, '')),
-    mime: type.mime, ext: type.ext, size: req.file.size,
-    width: Number(req.body.width) || undefined, height: Number(req.body.height) || undefined,
-    data: req.file.buffer,
-  });
-  invalidateImages(business);
+  const img = await saveImage(oid(req.params.bid), name, req.file.buffer, type, { width: Number(req.body.width) || 0, height: Number(req.body.height) || 0 });
   res.json(toJson(img));
+}));
+
+// Copy an image from a web address into the library, so emails don't depend on the other site
+// (which may block hotlinking, move the file or need a login).
+api.post('/businesses/:bid/images/from-url', wrap(async (req, res) => {
+  const { buffer, contentType, finalUrl } = await fetchRemote(req.body.url, { maxBytes: MAX_LINK_BYTES });
+  const type = sniffImage(buffer);
+  if (!type) {
+    if (/text\/html/i.test(contentType)) throw new HttpError(400, 'That link opens a web page, not an image. Open the image, right-click it and choose "Copy image address", then paste that link.');
+    if (/svg/i.test(contentType)) throw new HttpError(400, 'SVG images are not supported in email. Use a JPG or PNG.');
+    throw new HttpError(400, 'That link is not a JPG, PNG, GIF or WebP image');
+  }
+  let name = nameFromUrl(String(finalUrl));
+  if (!/\.(jpe?g|png|gif|webp)$/i.test(name)) name = `${nameFromUrl(req.body.url).replace(/\.[^.]+$/, '') || 'image'}.${type.ext}`;
+  const img = await saveImage(oid(req.params.bid), name.slice(0, 200), buffer, type);
+  res.json(toJson(img));
+}));
+
+// ---------- files (PDFs, documents…) for buttons and links ----------
+api.get('/businesses/:bid/files', wrap(async (req, res) => {
+  const rows = await Image.find({ business: oid(req.params.bid), kind: 'file' }).sort({ createdAt: -1 }).lean();
+  res.json(rows.map(toJson));
+}));
+
+api.post('/businesses/:bid/files', single, wrap(async (req, res) => {
+  if (!req.file) throw new HttpError(400, 'Choose a file');
+  const name = String(req.file.originalname || 'file').slice(0, 200);
+  const type = sniffFile(req.file.buffer, name);
+  if (!type) throw new HttpError(400, 'Supported files: PDF, Word, Excel, PowerPoint, ZIP, CSV, TXT, MP3, MP4 and images');
+  const file = await Image.create({
+    business: oid(req.params.bid), kind: 'file', name,
+    mime: type.mime, ext: type.ext, size: req.file.size, data: req.file.buffer,
+  });
+  res.json(toJson(file));
 }));
 
 api.delete('/images/:id', wrap(async (req, res) => {
@@ -85,16 +122,24 @@ api.delete('/images/:id', wrap(async (req, res) => {
 // ---------- public: loaded by recipients' email apps ----------
 const pub = express.Router();
 
+// Shown in the browser; everything else downloads.
+const INLINE = /^(image\/|application\/pdf|video\/mp4|audio\/mpeg)/;
+
 pub.get('/i/:file', wrap(async (req, res) => {
   const id = req.params.file.split('.')[0];
   if (!/^[a-f0-9]{24}$/.test(id)) return res.status(404).end();
-  const img = await Image.findById(id).select('+data mime').lean();
+  const img = await Image.findById(id).select('+data mime kind name').lean();
   if (!img) return res.status(404).end();
   res.set({
     'Content-Type': img.mime,
     'Cache-Control': 'public, max-age=31536000, immutable',
     'X-Content-Type-Options': 'nosniff',
   });
+  if (img.kind === 'file') {
+    const name = String(img.name || 'file');
+    const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    res.set('Content-Disposition', `${INLINE.test(img.mime) ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  }
   // .lean() returns a BSON Binary; convert its bytes (a Node Buffer's .buffer would be the whole memory pool).
   res.end(Buffer.isBuffer(img.data) ? img.data : Buffer.from(img.data.buffer));
 }));

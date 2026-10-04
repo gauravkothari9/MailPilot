@@ -5,6 +5,7 @@ import { useApp } from '../context';
 import { Icon, Loading, Field, Modal, Badge, Spinner, fmtNum, useDebounced } from '../components/ui';
 import SegmentBuilder from '../components/SegmentBuilder';
 import ImageModal from '../components/ImageModal';
+import ButtonModal from '../components/ButtonModal';
 import { placementIndexes } from '../placement';
 import { checkContent } from '../contentCheck';
 
@@ -101,21 +102,24 @@ export default function CampaignEditor() {
     requestAnimationFrame(() => { el.focus(); el.selectionStart = el.selectionEnd = s + text.length; });
   };
   const insertTag = (tag) => insertText(`{{${tag}}}`);
-  const openImagePicker = () => {
+  // Opens an insert modal (image picker, button) remembering the cursor.
+  const openInsert = (which) => {
     const el = htmlRef.current;
     // A cursor counts only if the user actually clicked into the HTML box.
     const hasCursor = !!el && (document.activeElement === el || el.selectionStart > 0);
     cursor.current = hasCursor ? { start: el.selectionStart, end: el.selectionEnd, real: true } : null;
-    setModal('image');
+    setModal(which);
   };
-  const insertImages = (html, count, placement) => {
+  const insertBlock = (html, placement, message) => {
     let at = null;
     if (placement !== 'cursor' || !cursor.current?.real) at = placementIndexes(c.html)[placement === 'cursor' ? 'top' : placement];
     if (at !== null && at !== undefined) cursor.current = { start: at, end: at };
     insertText(html);
     setModal(null);
-    toast(count > 1 ? `${count} images inserted` : 'Image inserted', 'success');
+    toast(message, 'success');
   };
+  const insertImages = (html, count, placement) => insertBlock(html, placement, count > 1 ? `${count} images inserted` : 'Image inserted');
+  const closeInsert = () => { cursor.current = null; setModal(null); };
 
   const flush = async () => (dirty.current ? save(payload) : true);
 
@@ -250,7 +254,8 @@ export default function CampaignEditor() {
             <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
               <h3 className="section-title" style={{ margin: 0 }}>3 · Content</h3>
               <div className="row" style={{ gap: 6 }}>
-                <button className="btn btn-sm btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={openImagePicker}><Icon name="image" />Insert image</button>
+                <button className="btn btn-sm btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => openInsert('image')}><Icon name="image" />Insert image</button>
+                <button className="btn btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => openInsert('button')} title="A button linking to a web page or a PDF / file"><Icon name="button" />Insert button</button>
                 <button className="btn btn-sm" onClick={() => { setModal('tpl'); api.get(`/businesses/${businessId}/templates`).then(setTemplates); }}><Icon name="template" />Templates</button>
               </div>
             </div>
@@ -368,7 +373,10 @@ export default function CampaignEditor() {
       )}
 
       {modal === 'image' && (
-        <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onLibraryChange={setImages} onClose={() => { cursor.current = null; setModal(null); }} onInsert={insertImages} />
+        <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onLibraryChange={setImages} onClose={closeInsert} onInsert={insertImages} />
+      )}
+      {modal === 'button' && (
+        <ButtonModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onClose={closeInsert} onInsert={(html, placement) => insertBlock(html, placement, 'Button inserted')} />
       )}
 
       {modal === 'saveTpl' && (

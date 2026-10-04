@@ -37,6 +37,9 @@ const PATHS = {
   arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   filter: '<path d="M22 3H2l8 9.46V19l4 2v-8.54z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+  button: '<rect x="2" y="7" width="20" height="10" rx="5"/><path d="M8 12h8"/>',
 };
 
 export function Icon({ name, size, className, style }) {

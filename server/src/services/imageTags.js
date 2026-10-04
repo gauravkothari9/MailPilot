@@ -23,7 +23,7 @@ async function imageMap(businessId) {
   const key = String(businessId);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL) return hit.map;
-  const rows = await Image.find({ business: businessId, tag: { $nin: [null, ''] } }).select('tag ext width name').lean();
+  const rows = await Image.find({ business: businessId, kind: { $ne: 'file' }, tag: { $nin: [null, ''] } }).select('tag ext width name').lean();
   const map = new Map(rows.map((r) => [r.tag, r]));
   cache.set(key, { at: Date.now(), map });
   return map;
@@ -67,7 +67,7 @@ async function applyImageTags(html, businessId, vars) {
 /** Next free tag for a business, e.g. "banner", "banner_2". */
 async function uniqueTag(businessId, wanted, excludeId) {
   const base = tagSlug(wanted) || 'image';
-  const taken = new Set((await Image.find({ business: businessId, tag: new RegExp(`^${base}(_\\d+)?$`), ...(excludeId ? { _id: { $ne: excludeId } } : {}) }).select('tag').lean()).map((r) => r.tag));
+  const taken = new Set((await Image.find({ business: businessId, kind: { $ne: 'file' }, tag: new RegExp(`^${base}(_\\d+)?$`), ...(excludeId ? { _id: { $ne: excludeId } } : {}) }).select('tag').lean()).map((r) => r.tag));
   if (!taken.has(base)) return base;
   for (let i = 2; ; i++) if (!taken.has(`${base}_${i}`)) return `${base}_${i}`;
 }
