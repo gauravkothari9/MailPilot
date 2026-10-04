@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
 import { Modal, Icon, Field, Spinner, Tabs, Badge, useConfirm } from './ui';
-import LinkField, { validLink, loadFiles, MAX_MB, ACCEPT, kb } from './LinkField';
+import LinkField, { validLink, loadFiles, uploadFile, MAX_MB, ACCEPT, kb } from './LinkField';
 import { buttonsHtml, BUTTON_STYLE } from '../buttonHtml';
 import { PLACEMENTS } from '../placement';
 
@@ -53,9 +53,7 @@ export default function ButtonModal({ onInsert, onClose, hasCursor = false, spot
       if (status[i].status === 'error') continue;
       setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)));
       try {
-        const fd = new FormData();
-        fd.append('file', list[i]);
-        done.push(await api.post(`/businesses/${businessId}/files`, fd));
+        done.push(await uploadFile(businessId, list[i], (p) => setUploads((u) => u.map((x, j) => (j === i ? { ...x, progress: p } : x)))));
         setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'done' } : x)));
       } catch (e) {
         setUploads((u) => u.map((x, j) => (j === i ? { ...x, status: 'error', error: e.message } : x)));
@@ -162,6 +160,17 @@ export default function ButtonModal({ onInsert, onClose, hasCursor = false, spot
             { value: 'link', label: 'File from a link' },
             { value: 'web', label: 'Web page' },
           ]} />
+          {selected.length > 0 && (
+            <div className="picked">
+              <span className="small muted">Selected:</span>
+              {selected.map((s, i) => (
+                <span key={s.key} className="picked-chip" title={s.link}>
+                  <b>{i + 1}</b><Icon name={s.link.startsWith('/i/') ? 'file' : 'link'} size={13} /><span className="truncate">{s.link.startsWith('/i/') ? s.name : s.text}</span>
+                  <button type="button" onClick={() => setSelected((x) => x.filter((y) => y.key !== s.key))} aria-label={`Remove ${s.name}`}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div style={{ height: 16 }} />
 
           {tab === 'upload' && (
@@ -180,7 +189,7 @@ export default function ButtonModal({ onInsert, onClose, hasCursor = false, spot
                     <li key={i}>
                       <span className="truncate">{u.name}</span>
                       {u.status === 'waiting' && <span className="muted small">waiting</span>}
-                      {u.status === 'uploading' && <Spinner />}
+                      {u.status === 'uploading' && <span className="row small muted" style={{ gap: 6 }}><Spinner />{Math.round((u.progress || 0) * 100)}%</span>}
                       {u.status === 'done' && <Badge color="green">✓ uploaded</Badge>}
                       {u.status === 'error' && <Badge color="red" title={u.error}>✕ {u.error}</Badge>}
                     </li>

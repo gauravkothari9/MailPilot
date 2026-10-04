@@ -2,7 +2,8 @@
 // (logged in) and public serving.
 const express = require('express');
 const multer = require('multer');
-const { Image } = require('../models');
+const mongoose = require('mongoose');
+const { Image, UploadPart } = require('../models');
 const { wrap, oid, HttpError } = require('../utils');
 const { uniqueTag, tagSlug, invalidateImages } = require('../services/imageTags');
 const { sniffImage, imageSize, sniffFile } = require('../services/fileTypes');
@@ -12,6 +13,10 @@ const { fetchRemote } = require('../services/fetchRemote');
 const MAX_BYTES = 4 * 1024 * 1024;
 // Links are downloaded by this server directly, so they aren't bound by the upload limit.
 const MAX_LINK_BYTES = 10 * 1024 * 1024;
+// Files for buttons can be big; they upload in parts of PART_BYTES (see /files/uploads).
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const PART_BYTES = 3 * 1024 * 1024;
+const filesBucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'files' });
 // defParamCharset: read file names as UTF-8 ("côte.png" would otherwise arrive as "cÃ´te.png").
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES }, defParamCharset: 'utf8' });
 const single = (req, res, next) => upload.single('file')(req, res, (err) => {
@@ -113,6 +118,61 @@ api.post('/businesses/:bid/files', single, wrap(async (req, res) => {
   res.json(toJson(file));
 }));
 
+// Large files upload in parts: start → parts (each under the proxy's request limit) → finish.
+// The finished file is stored in GridFS, which has no per-document size limit.
+api.post('/businesses/:bid/files/uploads', wrap(async (req, res) => {
+  const size = Number(req.body.size);
+  if (!(size > 0)) throw new HttpError(400, 'Choose a file');
+  if (size > MAX_FILE_BYTES) throw new HttpError(400, `Files can be up to ${MAX_FILE_BYTES / 1048576} MB`);
+  res.json({ uploadId: new mongoose.Types.ObjectId(), partSize: PART_BYTES });
+}));
+
+api.post('/businesses/:bid/files/uploads/:uid/parts/:index', single, wrap(async (req, res) => {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= Math.ceil(MAX_FILE_BYTES / PART_BYTES)) throw new HttpError(400, 'Invalid part');
+  if (!req.file || req.file.size > PART_BYTES) throw new HttpError(400, 'Invalid part');
+  const business = oid(req.params.bid);
+  const upload = oid(req.params.uid);
+  await UploadPart.updateOne({ upload, index }, { business, data: req.file.buffer, createdAt: new Date() }, { upsert: true });
+  res.json({ ok: true });
+}));
+
+api.post('/businesses/:bid/files/uploads/:uid/finish', wrap(async (req, res) => {
+  const business = oid(req.params.bid);
+  const upload = oid(req.params.uid);
+  const parts = Number(req.body.parts);
+  const name = String(req.body.name || 'file').slice(0, 200);
+  const stored = await UploadPart.find({ upload, business }).select('index').sort({ index: 1 }).lean();
+  if (!parts || stored.length !== parts || stored.some((p, i) => p.index !== i)) throw new HttpError(400, 'Some parts of the upload are missing. Please upload the file again.');
+  const first = await UploadPart.findOne({ upload, index: 0 }).lean();
+  const firstBuf = Buffer.isBuffer(first.data) ? first.data : Buffer.from(first.data.buffer);
+  const type = sniffFile(firstBuf, name);
+  if (!type) {
+    await UploadPart.deleteMany({ upload });
+    throw new HttpError(400, 'Supported files: PDF, Word, Excel, PowerPoint, ZIP, CSV, TXT, MP3, MP4 and images');
+  }
+  // Copy the parts in order into GridFS, one at a time to keep memory low.
+  const stream = filesBucket().openUploadStream(name, { metadata: { business, mime: type.mime } });
+  let size = 0;
+  try {
+    for (let i = 0; i < parts; i++) {
+      const p = i === 0 ? first : await UploadPart.findOne({ upload, index: i }).lean();
+      const buf = Buffer.isBuffer(p.data) ? p.data : Buffer.from(p.data.buffer);
+      size += buf.length;
+      if (size > MAX_FILE_BYTES) throw new HttpError(400, `Files can be up to ${MAX_FILE_BYTES / 1048576} MB`);
+      if (!stream.write(buf)) await new Promise((ok) => stream.once('drain', ok));
+    }
+    await new Promise((ok, fail) => stream.end((err) => (err ? fail(err) : ok())));
+  } catch (e) {
+    stream.abort().catch(() => {});
+    await UploadPart.deleteMany({ upload });
+    throw e;
+  }
+  await UploadPart.deleteMany({ upload });
+  const file = await Image.create({ business, kind: 'file', name, mime: type.mime, ext: type.ext, size, gridId: stream.id });
+  res.json(toJson(file));
+}));
+
 // Copy a file (PDF, document…) from a web address into the file library.
 api.post('/businesses/:bid/files/from-url', wrap(async (req, res) => {
   const { buffer, contentType, finalUrl } = await fetchRemote(req.body.url, { maxBytes: MAX_LINK_BYTES });
@@ -132,8 +192,9 @@ api.post('/businesses/:bid/files/from-url', wrap(async (req, res) => {
 }));
 
 api.delete('/images/:id', wrap(async (req, res) => {
-  const img = await Image.findByIdAndDelete(oid(req.params.id)).select('business').lean();
+  const img = await Image.findByIdAndDelete(oid(req.params.id)).select('business gridId').lean();
   if (img) invalidateImages(img.business);
+  if (img?.gridId) await filesBucket().delete(img.gridId).catch(() => {});
   res.json({ ok: true });
 }));
 
@@ -146,8 +207,9 @@ const INLINE = /^(image\/|application\/pdf|video\/mp4|audio\/mpeg)/;
 pub.get('/i/:file', wrap(async (req, res) => {
   const id = req.params.file.split('.')[0];
   if (!/^[a-f0-9]{24}$/.test(id)) return res.status(404).end();
-  const img = await Image.findById(id).select('+data mime kind name').lean();
+  const img = await Image.findById(id).select('+data mime kind name size gridId').lean();
   if (!img) return res.status(404).end();
+  if (img.gridId) res.set('Content-Length', String(img.size));
   res.set({
     'Content-Type': img.mime,
     'Cache-Control': 'public, max-age=31536000, immutable',
@@ -157,6 +219,11 @@ pub.get('/i/:file', wrap(async (req, res) => {
     const name = String(img.name || 'file');
     const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
     res.set('Content-Disposition', `${INLINE.test(img.mime) ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  }
+  if (img.gridId) {
+    const download = filesBucket().openDownloadStream(img.gridId);
+    download.on('error', () => (res.headersSent ? res.destroy() : res.status(404).end()));
+    return download.pipe(res);
   }
   // .lean() returns a BSON Binary; convert its bytes (a Node Buffer's .buffer would be the whole memory pool).
   res.end(Buffer.isBuffer(img.data) ? img.data : Buffer.from(img.data.buffer));

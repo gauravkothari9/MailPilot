@@ -166,10 +166,22 @@ const imageSchema = new Schema({
   size: Number,
   width: Number,
   height: Number,
-  data: { type: Buffer, required: true, select: false },
+  // Small files live in `data`; large files (over MongoDB's 16 MB document limit) in GridFS.
+  data: { type: Buffer, select: false, required() { return !this.gridId; } },
+  gridId: Schema.Types.ObjectId,
 }, opts);
 imageSchema.index({ business: 1, tag: 1 });
 const Image = model('Image', imageSchema);
+
+// Pieces of a large file upload. Uploads go in pieces because the hosting proxy (Vercel)
+// limits each request to ~4.5 MB; unfinished uploads are removed after a day.
+const UploadPart = model('UploadPart', new Schema({
+  upload: { type: Schema.Types.ObjectId, required: true },
+  business: { ...ref('Business'), required: true },
+  index: { type: Number, required: true },
+  data: { type: Buffer, required: true },
+  createdAt: { type: Date, default: Date.now, expires: 86400 },
+}).index({ upload: 1, index: 1 }, { unique: true }));
 
 async function getSetting(key, fallback = null) {
   const s = await Setting.findOne({ key }).lean();
@@ -180,4 +192,4 @@ async function setSetting(key, value) {
   await Setting.updateOne({ key }, { value }, { upsert: true });
 }
 
-module.exports = { User, Setting, Business, Sender, List, Contact, Campaign, Message, Link, Event, Template, Image, getSetting, setSetting };
+module.exports = { User, Setting, Business, Sender, List, Contact, Campaign, Message, Link, Event, Template, Image, UploadPart, getSetting, setSetting };

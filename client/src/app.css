@@ -203,3 +203,7 @@ input[type="color"] { padding: 2px; height: 38px; cursor: pointer; }
 .img-item.btn-item { grid-template-columns: 1fr auto; }
 .file-list.file-list-lg { max-height: 360px; gap: 6px; }
 .file-check { position: static; width: 20px; height: 20px; font-size: 11px; box-shadow: none; flex: none; }
+.picked { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.picked-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 240px; padding: 3px 4px 3px 8px; border: 1px solid #c7d2fe; background: var(--primary-soft); color: var(--primary); border-radius: 999px; font-size: 12.5px; }
+.picked-chip b { font-size: 11px; }
+.picked-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }

@@ -3,7 +3,25 @@ import { api } from '../api';
 import { useApp } from '../context';
 import { Icon, Spinner, useConfirm } from './ui';
 
-export const MAX_MB = 4;
+export const MAX_MB = 100;
+
+/**
+ * Uploads a file to the file library in parts (the hosting proxy limits each request to ~4.5 MB).
+ * onProgress(0..1) is called after each part. Resolves the saved file.
+ */
+export async function uploadFile(businessId, file, onProgress) {
+  const base = `/businesses/${businessId}/files/uploads`;
+  const { uploadId, partSize } = await api.post(base, { name: file.name, size: file.size });
+  const parts = Math.ceil(file.size / partSize);
+  for (let i = 0; i < parts; i++) {
+    const fd = new FormData();
+    fd.append('file', file.slice(i * partSize, (i + 1) * partSize), file.name);
+    // One retry per part: a dropped connection shouldn't cost the whole upload.
+    try { await api.post(`${base}/${uploadId}/parts/${i}`, fd); } catch { await api.post(`${base}/${uploadId}/parts/${i}`, fd); }
+    onProgress?.((i + 1) / parts);
+  }
+  return api.post(`${base}/${uploadId}/finish`, { name: file.name, parts });
+}
 export const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.csv,.txt,.mp3,.mp4,.jpg,.jpeg,.png,.gif,.webp';
 export const kb =(n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
 
@@ -26,12 +44,14 @@ export default function LinkField({ value, onChange, placeholder = 'https://exam
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [confirm, dialog] = useConfirm();
   const input = useRef();
 
   useEffect(() => {
-    if (open && !files) loadFiles(businessId).then(setFiles).catch((e) => toast(e.message, 'error'));
-  }, [open, files, businessId, toast]);
+    // Also load when the link already points to a file, to show the file's name.
+    if ((open || value?.startsWith('/i/')) && !files) loadFiles(businessId).then(setFiles).catch((e) => toast(e.message, 'error'));
+  }, [open, value, files, businessId, toast]);
 
   const current = files?.find((f) => f.url === value) || (value?.startsWith('/i/') ? { name: 'Uploaded file' } : null);
 
@@ -40,14 +60,12 @@ export default function LinkField({ value, onChange, placeholder = 'https://exam
     if (file.size > MAX_MB * 1048576) return toast(`${file.name} is ${kb(file.size)}. Files can be up to ${MAX_MB} MB.`, 'error');
     setBusy(true);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const f = await api.post(`/businesses/${businessId}/files`, fd);
+      const f = await uploadFile(businessId, file, (p) => setProgress(p));
       setFiles(await loadFiles(businessId, true));
       onChange(f.url);
       setOpen(false);
       toast(`${f.name} uploaded and linked`, 'success');
-    } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+    } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); setProgress(0); }
   };
 
   const remove = async (f) => {
@@ -79,7 +97,7 @@ export default function LinkField({ value, onChange, placeholder = 'https://exam
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="small muted">Link to a file: PDF, Word, Excel, PowerPoint, ZIP… up to {MAX_MB} MB</span>
             <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => input.current.click()}>
-              {busy ? <Spinner /> : <Icon name="upload" />}Upload file
+              {busy ? <><Spinner />{Math.round(progress * 100)}%</> : <><Icon name="upload" />Upload file</>}
             </button>
             <input ref={input} type="file" accept={ACCEPT} hidden onChange={(e) => { upload(e.target.files[0]); e.target.value = ''; }} />
           </div>
