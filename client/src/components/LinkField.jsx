@@ -3,13 +3,13 @@ import { api } from '../api';
 import { useApp } from '../context';
 import { Icon, Spinner, useConfirm } from './ui';
 
-const MAX_MB = 4;
-const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.csv,.txt,.mp3,.mp4,.jpg,.jpeg,.png,.gif,.webp';
-const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+export const MAX_MB = 4;
+export const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.csv,.txt,.mp3,.mp4,.jpg,.jpeg,.png,.gif,.webp';
+export const kb =(n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
 
 // One file list per business, shared by every LinkField on the page.
 const cache = new Map();
-const loadFiles = (businessId, fresh) => {
+export const loadFiles = (businessId, fresh) => {
   if (fresh || !cache.has(businessId)) cache.set(businessId, api.get(`/businesses/${businessId}/files`).catch((e) => { cache.delete(businessId); throw e; }));
   return cache.get(businessId);
 };

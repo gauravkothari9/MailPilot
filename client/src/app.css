@@ -200,3 +200,6 @@
 .file-pick:hover { color: var(--primary); }
 .file-pick .truncate { flex: 1; }
 input[type="color"] { padding: 2px; height: 38px; cursor: pointer; }
+.img-item.btn-item { grid-template-columns: 1fr auto; }
+.file-list.file-list-lg { max-height: 360px; gap: 6px; }
+.file-check { position: static; width: 20px; height: 20px; font-size: 11px; box-shadow: none; flex: none; }

@@ -376,7 +376,7 @@ export default function CampaignEditor() {
         <ImageModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onLibraryChange={setImages} onClose={closeInsert} onInsert={insertImages} />
       )}
       {modal === 'button' && (
-        <ButtonModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onClose={closeInsert} onInsert={(html, placement) => insertBlock(html, placement, 'Button inserted')} />
+        <ButtonModal hasCursor={!!cursor.current?.real} spots={placementIndexes(c.html)} onClose={closeInsert} onInsert={(html, count, placement) => insertBlock(html, placement, count > 1 ? `${count} buttons inserted` : 'Button inserted')} />
       )}
 
       {modal === 'saveTpl' && (

@@ -113,6 +113,24 @@ api.post('/businesses/:bid/files', single, wrap(async (req, res) => {
   res.json(toJson(file));
 }));
 
+// Copy a file (PDF, document…) from a web address into the file library.
+api.post('/businesses/:bid/files/from-url', wrap(async (req, res) => {
+  const { buffer, contentType, finalUrl } = await fetchRemote(req.body.url, { maxBytes: MAX_LINK_BYTES });
+  let name = nameFromUrl(String(finalUrl));
+  if (!/\.[a-z0-9]{2,4}$/i.test(name)) name = nameFromUrl(req.body.url);
+  const type = sniffFile(buffer, name);
+  if (!type) {
+    if (/text\/html/i.test(contentType)) throw new HttpError(400, 'That link opens a web page, not a file. To link to the page, use the "Web page" tab instead.');
+    throw new HttpError(400, 'Supported files: PDF, Word, Excel, PowerPoint, ZIP, CSV, TXT, MP3, MP4 and images');
+  }
+  if (!name.toLowerCase().endsWith(`.${type.ext}`)) name = `${name.replace(/\.[^.]+$/, '') || 'file'}.${type.ext}`;
+  const file = await Image.create({
+    business: oid(req.params.bid), kind: 'file', name: name.slice(0, 200),
+    mime: type.mime, ext: type.ext, size: buffer.length, data: buffer,
+  });
+  res.json(toJson(file));
+}));
+
 api.delete('/images/:id', wrap(async (req, res) => {
   const img = await Image.findByIdAndDelete(oid(req.params.id)).select('business').lean();
   if (img) invalidateImages(img.business);
