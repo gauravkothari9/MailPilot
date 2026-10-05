@@ -70,7 +70,9 @@ router.put('/campaigns/:id', wrap(async (req, res) => {
   const c = await load(req.params.id);
   if (!['draft', 'paused'].includes(c.status)) throw new HttpError(400, 'Only draft or paused campaigns can be edited');
   const b = req.body;
-  for (const k of ['name', 'subject', 'preheader', 'html', 'trackOpens', 'trackClicks', 'audience']) if (b[k] !== undefined) c[k] = b[k];
+  for (const k of ['name', 'subject', 'preheader', 'html', 'trackOpens', 'trackClicks']) if (b[k] !== undefined) c[k] = b[k];
+  // Only list campaigns can switch to "all subscribers" and back; follow-up audiences stay fixed.
+  if (['list', 'all'].includes(b.audience) && ['list', 'all'].includes(c.audience)) c.audience = b.audience;
   for (const k of ['sender', 'list', 'sourceCampaign']) if (b[k] !== undefined) c[k] = b[k] ? oid(b[k]) : undefined;
   if (Array.isArray(b.rules)) c.rules = b.rules.filter((r) => r && r.field && r.op).map((r) => ({ field: String(r.field), op: String(r.op), value: String(r.value ?? '') }));
   if (b.abTest && typeof b.abTest === 'object' && c.status === 'draft') {
@@ -94,7 +96,7 @@ router.delete('/campaigns/:id', wrap(async (req, res) => {
 router.post('/campaigns/:id/duplicate', wrap(async (req, res) => {
   const c = await load(req.params.id);
   const copy = await Campaign.create({
-    business: c.business, sender: c.sender, list: c.list, name: `${c.name} (copy)`, subject: c.subject, preheader: c.preheader,
+    business: c.business, sender: c.sender, list: c.list, audience: c.audience === 'all' ? 'all' : 'list', name: `${c.name} (copy)`, subject: c.subject, preheader: c.preheader,
     html: c.html, trackOpens: c.trackOpens, trackClicks: c.trackClicks, rules: c.rules,
     abTest: { enabled: c.abTest?.enabled, subjectB: c.abTest?.subjectB, testPercent: c.abTest?.testPercent, waitHours: c.abTest?.waitHours, metric: c.abTest?.metric },
   });
@@ -120,7 +122,7 @@ async function sampleContact(c) {
 
 router.get('/campaigns/:id/audience', wrap(async (req, res) => {
   const c = await load(req.params.id);
-  const ok = c.audience === 'list' ? !!c.list : !!c.sourceCampaign;
+  const ok = c.audience === 'all' || (c.audience === 'list' ? !!c.list : !!c.sourceCampaign);
   res.json({ count: ok ? await Contact.countDocuments(await mailer.audienceQuery(c)) : 0 });
 }));
 

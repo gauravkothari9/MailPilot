@@ -65,7 +65,7 @@ const Campaign = model('Campaign', new Schema({
   business: { ...ref('Business'), required: true, index: true },
   sender: ref('Sender'),
   list: ref('List'),
-  // list | non_openers | non_clickers (of sourceCampaign)
+  // list | all (every subscribed contact) | non_openers | non_clickers (of sourceCampaign)
   audience: { type: String, default: 'list' },
   sourceCampaign: ref('Campaign'),
   // Extra segment filters applied on top of the audience, e.g. { field: 'fields.city', op: 'equals', value: 'Pune' }

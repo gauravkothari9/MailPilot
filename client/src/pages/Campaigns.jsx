@@ -83,7 +83,7 @@ export default function Campaigns() {
                         {['sending', 'testing', 'paused'].includes(c.status) && <div style={{ marginTop: 6, width: 110 }}><Progress value={progress} /></div>}
                       </td>
                       <td className="small">
-                        {c.audience === 'list' ? (c.list?.name || <span className="muted">No list</span>) : <>{c.audience === 'non_openers' ? 'Non-openers' : 'Non-clickers'} of <i>{c.sourceCampaign?.name}</i></>}
+                        {c.audience === 'all' ? 'All subscribers' : c.audience === 'list' ? (c.list?.name || <span className="muted">No list</span>) : <>{c.audience === 'non_openers' ? 'Non-openers' : 'Non-clickers'} of <i>{c.sourceCampaign?.name}</i></>}
                         <div className="muted">{c.sender?.fromEmail || 'No sender'}</div>
                       </td>
                       <td>{fmtNum(s.sent)}{s.failed > 0 && <div className="small text-red">{fmtNum(s.failed)} failed</div>}</td>

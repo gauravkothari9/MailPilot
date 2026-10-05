@@ -25,14 +25,14 @@ function ruleToQuery({ field, op, value = '' }) {
   }
 }
 
-/** Contacts a campaign targets: a list (or non-openers / non-clickers of an earlier campaign), narrowed by segment rules. */
+/** Contacts a campaign targets: a list, all subscribers (or non-openers / non-clickers of an earlier campaign), narrowed by segment rules. */
 async function audienceQuery(campaign) {
   const q = { business: campaign.business, unsubscribed: false, bounced: false };
   if (campaign.audience === 'non_openers' || campaign.audience === 'non_clickers') {
     const field = campaign.audience === 'non_openers' ? 'openedAt' : 'clickedAt';
     const ids = await Message.distinct('contact', { campaign: campaign.sourceCampaign, status: 'sent', [field]: null });
     q._id = { $in: ids };
-  } else {
+  } else if (campaign.audience !== 'all') {
     q.lists = campaign.list;
   }
   const rules = (campaign.rules || []).filter((r) => r.field && r.op);
