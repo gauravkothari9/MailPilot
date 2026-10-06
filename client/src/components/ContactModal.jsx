@@ -4,10 +4,10 @@ import { api } from '../api';
 import { useApp } from '../context';
 import { Modal, Field, Loading, Tabs, StatusBadge, fmtDate, fmtNum, timeAgo, EVENT_META, Badge } from './ui';
 
-/** Create (no id) or view/edit a contact with its full email history. */
-export default function ContactModal({ id, lists, onClose, onSaved }) {
+/** Create (no id) or view/edit a contact with its full email history. A new contact starts in defaultListId, if given. */
+export default function ContactModal({ id, lists, defaultListId, onClose, onSaved }) {
   const { businessId, toast } = useApp();
-  const [c, setC] = useState(id ? null : { email: '', firstName: '', lastName: '', company: '', phone: '', lists: [], tags: [], fields: {} });
+  const [c, setC] = useState(id ? null : { email: '', firstName: '', lastName: '', company: '', phone: '', lists: defaultListId ? [defaultListId] : [], tags: [], fields: {} });
   const [tab, setTab] = useState('details');
   const [busy, setBusy] = useState(false);
   const [tagText, setTagText] = useState('');
@@ -92,6 +92,7 @@ export default function ContactModal({ id, lists, onClose, onSaved }) {
                 ))}
                 {!lists.length && <span className="muted small">No lists yet</span>}
               </div>
+              {!c.lists.length && <p className="small text-amber">Not in any list: campaigns sent to a list won't reach this contact, only campaigns sent to “All subscribers”.</p>}
               {id && (
                 <>
                   <h3 className="section-title">Status</h3>

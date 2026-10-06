@@ -65,8 +65,9 @@ const Campaign = model('Campaign', new Schema({
   business: { ...ref('Business'), required: true, index: true },
   sender: ref('Sender'),
   list: ref('List'),
-  // list | all (every subscribed contact) | non_openers | non_clickers (of sourceCampaign)
+  // list | all (every subscribed contact) | contacts (hand-picked) | non_openers | non_clickers (of sourceCampaign)
   audience: { type: String, default: 'list' },
+  contacts: { type: [ref('Contact')], default: [] },
   sourceCampaign: ref('Campaign'),
   // Extra segment filters applied on top of the audience, e.g. { field: 'fields.city', op: 'equals', value: 'Pune' }
   rules: { type: [{ _id: false, field: String, op: String, value: String }], default: [] },
@@ -86,6 +87,9 @@ const Campaign = model('Campaign', new Schema({
   html: { type: String, default: '' },
   trackOpens: { type: Boolean, default: true },
   trackClicks: { type: Boolean, default: true },
+  // Minutes to wait between two emails of this campaign (0 = only the sender's rate limit applies).
+  delayMinutes: { type: Number, default: 0, min: 0 },
+  nextSendAt: Date,
   // draft | scheduled | testing (A/B) | sending | paused | sent
   status: { type: String, default: 'draft', index: true },
   note: String,

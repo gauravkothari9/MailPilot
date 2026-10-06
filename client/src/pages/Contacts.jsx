@@ -136,7 +136,7 @@ export default function Contacts() {
       </div>
 
       {importing && <ImportModal lists={lists} defaultListId={list} onClose={() => setImporting(false)} onDone={() => { load(); loadMeta(); }} />}
-      {open && <ContactModal id={open === 'new' ? null : open} lists={lists} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); load(); loadMeta(); }} />}
+      {open && <ContactModal id={open === 'new' ? null : open} lists={lists} defaultListId={list} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); load(); loadMeta(); }} />}
       {bulk && (
         <Modal title={bulk.action === 'addTag' ? `Tag ${selected.size} contacts` : `Add ${selected.size} contacts to a list`} onClose={() => setBulk(null)}
           footer={<><button className="btn" onClick={() => setBulk(null)}>Cancel</button>

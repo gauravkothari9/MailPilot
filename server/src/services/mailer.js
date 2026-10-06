@@ -268,6 +268,7 @@ async function processCampaign(c) {
   }
   const sid = String(sender._id);
   if ((senderNextAt.get(sid) || 0) > Date.now()) return;
+  if (c.delayMinutes > 0 && c.nextSendAt > new Date()) return;
 
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
@@ -298,6 +299,7 @@ async function processCampaign(c) {
   }
 
   senderNextAt.set(sid, Date.now() + Math.ceil(60000 / Math.max(1, sender.ratePerMinute)));
+  if (c.delayMinutes > 0) await Campaign.updateOne({ _id: c._id }, { nextSendAt: new Date(Date.now() + c.delayMinutes * 60000) });
   const business = await Business.findById(c.business).lean();
 
   try {

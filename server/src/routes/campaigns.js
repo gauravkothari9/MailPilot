@@ -62,7 +62,8 @@ router.post('/businesses/:bid/campaigns', wrap(async (req, res) => {
 }));
 
 router.get('/campaigns/:id', wrap(async (req, res) => {
-  const c = (await load(req.params.id)).toObject();
+  const c = await Campaign.findById(oid(req.params.id)).populate('contacts', 'email firstName lastName').lean();
+  if (!c) throw new HttpError(404, 'Campaign not found');
   res.json({ ...c, stats: await statsFor({ campaign: c._id }) });
 }));
 
@@ -71,8 +72,16 @@ router.put('/campaigns/:id', wrap(async (req, res) => {
   if (!['draft', 'paused'].includes(c.status)) throw new HttpError(400, 'Only draft or paused campaigns can be edited');
   const b = req.body;
   for (const k of ['name', 'subject', 'preheader', 'html', 'trackOpens', 'trackClicks']) if (b[k] !== undefined) c[k] = b[k];
-  // Only list campaigns can switch to "all subscribers" and back; follow-up audiences stay fixed.
-  if (['list', 'all'].includes(b.audience) && ['list', 'all'].includes(c.audience)) c.audience = b.audience;
+  // List, "all subscribers" and hand-picked audiences can switch between each other; follow-up audiences stay fixed.
+  const PICKABLE = ['list', 'all', 'contacts'];
+  if (PICKABLE.includes(b.audience) && PICKABLE.includes(c.audience)) c.audience = b.audience;
+  if (Array.isArray(b.contacts)) c.contacts = [...new Set(b.contacts.map(String))].slice(0, 1000).map(oid);
+  if (b.delayMinutes !== undefined) {
+    c.delayMinutes = Math.min(1440, Math.max(0, Number(b.delayMinutes) || 0));
+    // A shorter delay takes effect right away instead of waiting out the old, longer gap.
+    const latest = new Date(Date.now() + c.delayMinutes * 60000);
+    if (c.nextSendAt > latest) c.nextSendAt = latest;
+  }
   for (const k of ['sender', 'list', 'sourceCampaign']) if (b[k] !== undefined) c[k] = b[k] ? oid(b[k]) : undefined;
   if (Array.isArray(b.rules)) c.rules = b.rules.filter((r) => r && r.field && r.op).map((r) => ({ field: String(r.field), op: String(r.op), value: String(r.value ?? '') }));
   if (b.abTest && typeof b.abTest === 'object' && c.status === 'draft') {
@@ -96,8 +105,8 @@ router.delete('/campaigns/:id', wrap(async (req, res) => {
 router.post('/campaigns/:id/duplicate', wrap(async (req, res) => {
   const c = await load(req.params.id);
   const copy = await Campaign.create({
-    business: c.business, sender: c.sender, list: c.list, audience: c.audience === 'all' ? 'all' : 'list', name: `${c.name} (copy)`, subject: c.subject, preheader: c.preheader,
-    html: c.html, trackOpens: c.trackOpens, trackClicks: c.trackClicks, rules: c.rules,
+    business: c.business, sender: c.sender, list: c.list, audience: ['all', 'contacts'].includes(c.audience) ? c.audience : 'list', contacts: c.contacts, name: `${c.name} (copy)`, subject: c.subject, preheader: c.preheader,
+    html: c.html, trackOpens: c.trackOpens, trackClicks: c.trackClicks, rules: c.rules, delayMinutes: c.delayMinutes,
     abTest: { enabled: c.abTest?.enabled, subjectB: c.abTest?.subjectB, testPercent: c.abTest?.testPercent, waitHours: c.abTest?.waitHours, metric: c.abTest?.metric },
   });
   res.json(copy);
@@ -122,7 +131,7 @@ async function sampleContact(c) {
 
 router.get('/campaigns/:id/audience', wrap(async (req, res) => {
   const c = await load(req.params.id);
-  const ok = c.audience === 'all' || (c.audience === 'list' ? !!c.list : !!c.sourceCampaign);
+  const ok = c.audience === 'all' || (c.audience === 'contacts' ? c.contacts.length > 0 : c.audience === 'list' ? !!c.list : !!c.sourceCampaign);
   res.json({ count: ok ? await Contact.countDocuments(await mailer.audienceQuery(c)) : 0 });
 }));
 
@@ -130,6 +139,7 @@ router.post('/campaigns/:id/preview', wrap(async (req, res) => {
   const c = await load(req.params.id);
   for (const k of ['subject', 'preheader', 'html', 'audience']) if (req.body[k] !== undefined) c[k] = req.body[k];
   for (const k of ['list', 'sourceCampaign']) if (req.body[k]) c[k] = oid(req.body[k]);
+  if (Array.isArray(req.body.contacts)) c.contacts = req.body.contacts.slice(0, 1000).map(oid);
   const [biz, contact] = await Promise.all([Business.findById(c.business).lean(), sampleContact(c)]);
   const r = await mailer.renderEmail(c, contact, biz, { token: null, relativeAssets: true });
   res.json({ ...r, sampleEmail: contact.email, tags: Object.keys(mailer.contactVars(contact, biz)) });
@@ -155,6 +165,7 @@ router.post('/campaigns/:id/send', wrap(async (req, res) => {
   if (!c.html.trim()) throw new HttpError(400, 'Add email content');
   if (!c.sender) throw new HttpError(400, 'Choose a sender email');
   if (c.audience === 'list' && !c.list) throw new HttpError(400, 'Choose a contact list');
+  if (c.audience === 'contacts' && !c.contacts.length) throw new HttpError(400, 'Pick at least one contact');
   if (c.abTest?.enabled && !c.abTest.subjectB.trim()) throw new HttpError(400, 'Add subject B for the A/B test, or turn the test off');
   const count = await Contact.countDocuments(await mailer.audienceQuery(c));
   if (!count) throw new HttpError(400, 'No subscribed contacts match this audience');

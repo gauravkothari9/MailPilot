@@ -4,17 +4,25 @@ import { api } from '../api';
 import { useApp } from '../context';
 import { Icon, Loading, Field, Modal, Badge, Spinner, fmtNum, useDebounced } from '../components/ui';
 import SegmentBuilder from '../components/SegmentBuilder';
+import ContactPicker from '../components/ContactPicker';
 import ImageModal from '../components/ImageModal';
 import ButtonModal from '../components/ButtonModal';
 import { placementIndexes } from '../placement';
 import { checkContent } from '../contentCheck';
 
-// Select value for the "All subscribers" audience (not a list id).
+// Select values for the "All subscribers" and "Specific contacts" audiences (not list ids).
 const ALL = '__all__';
+const PICK = '__contacts__';
 const LEVEL = { pass: ['green', '✓'], warn: ['amber', '!'], fail: ['red', '✕'], tip: ['blue', 'i'] };
 const toLocalInput = (d) => {
   const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return x.toISOString().slice(0, 16);
+};
+const fmtDuration = (min) => {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h}h${min % 60 ? ` ${min % 60}m` : ''}`;
+  return `${Math.round(h / 24)} days`;
 };
 
 export default function CampaignEditor() {
@@ -57,8 +65,8 @@ export default function CampaignEditor() {
   const updateAb = (patch) => update({ abTest: { ...c.abTest, ...patch } });
 
   const payload = useMemo(() => c && ({
-    name: c.name, subject: c.subject, preheader: c.preheader, html: c.html, sender: c.sender || null, list: c.list || null, audience: c.audience,
-    trackOpens: c.trackOpens, trackClicks: c.trackClicks, rules: c.rules, abTest: c.abTest,
+    name: c.name, subject: c.subject, preheader: c.preheader, html: c.html, sender: c.sender || null, list: c.list || null, audience: c.audience, contacts: (c.contacts || []).map((x) => x._id),
+    trackOpens: c.trackOpens, trackClicks: c.trackClicks, rules: c.rules, abTest: c.abTest, delayMinutes: c.delayMinutes || 0,
   }), [c]);
   const debounced = useDebounced(payload, 800);
 
@@ -81,7 +89,7 @@ export default function CampaignEditor() {
   useEffect(() => { if (debounced && dirty.current) save(debounced); }, [debounced, save]);
   useEffect(() => {
     if (!debounced) return;
-    api.post(`/campaigns/${id}/preview`, { subject: debounced.subject, preheader: debounced.preheader, html: debounced.html, list: debounced.list, audience: debounced.audience }).then(setPreview).catch(() => {});
+    api.post(`/campaigns/${id}/preview`, { subject: debounced.subject, preheader: debounced.preheader, html: debounced.html, list: debounced.list, audience: debounced.audience, contacts: debounced.contacts }).then(setPreview).catch(() => {});
   }, [debounced, id]);
   useEffect(() => { if (c?._id) api.get(`/campaigns/${id}/audience`).then((a) => setAudience(a.count)).catch(() => {}); }, [c?._id, id]);
   useEffect(() => {
@@ -165,11 +173,12 @@ export default function CampaignEditor() {
 
   if (!c) return <Loading />;
   const sender = senders.find((s) => s._id === c.sender);
-  const isFollowUp = !['list', 'all'].includes(c.audience);
+  const isFollowUp = !['list', 'all', 'contacts'].includes(c.audience);
   const blockers = [
     !c.subject.trim() && 'Add a subject line',
     !c.sender && 'Choose a sender email',
     c.audience === 'list' && !c.list && 'Choose a contact list',
+    c.audience === 'contacts' && !c.contacts?.length && 'Pick at least one contact',
     audience === 0 && 'No subscribed contacts match this audience',
     c.abTest?.enabled && !c.abTest.subjectB?.trim() && 'Add subject B for the A/B test',
   ].filter(Boolean);
@@ -206,13 +215,18 @@ export default function CampaignEditor() {
             {isFollowUp ? (
               <div className="alert info small"><Icon name="refresh" size={15} />Follow-up campaign: sends to {c.audience === 'non_openers' ? 'people who did not open' : 'people who did not click'} the original campaign.</div>
             ) : (
-              <Field label="Send to list">
-                <select value={c.audience === 'all' ? ALL : c.list || ''} onChange={(e) => update(e.target.value === ALL ? { audience: 'all', list: null } : { audience: 'list', list: e.target.value })}>
-                  <option value="">Choose list…</option>
-                  <option value={ALL}>All subscribers (every list)</option>
-                  {lists.map((l) => <option key={l._id} value={l._id}>{l.name} ({fmtNum(l.active)} subscribed)</option>)}
-                </select>
-              </Field>
+              <>
+                <Field label="Send to list">
+                  <select value={c.audience === 'all' ? ALL : c.audience === 'contacts' ? PICK : c.list || ''}
+                    onChange={(e) => update(e.target.value === ALL ? { audience: 'all', list: null } : e.target.value === PICK ? { audience: 'contacts', list: null } : { audience: 'list', list: e.target.value })}>
+                    <option value="">Choose list…</option>
+                    <option value={ALL}>All subscribers (every list)</option>
+                    <option value={PICK}>Specific contacts…</option>
+                    {lists.map((l) => <option key={l._id} value={l._id}>{l.name} ({fmtNum(l.active)} subscribed)</option>)}
+                  </select>
+                </Field>
+                {c.audience === 'contacts' && <Field label="Contacts"><ContactPicker value={c.contacts || []} onChange={(contacts) => update({ contacts })} /></Field>}
+              </>
             )}
             <span className="label-text">Segment <span className="muted small">(optional)</span></span>
             <SegmentBuilder rules={c.rules || []} onChange={(rules) => update({ rules })} fields={fields} tags={tags} />
@@ -342,11 +356,14 @@ export default function CampaignEditor() {
           {blockers.length > 0 && <div className="alert error"><div><b>Before sending:</b><ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{blockers.map((b) => <li key={b}>{b}</li>)}</ul></div></div>}
           <dl className="kv review">
             <dt>From</dt><dd>{sender ? `${sender.fromName} <${sender.fromEmail}>` : '—'}{sender && !sender.verified && <Badge color="red">not connected</Badge>}</dd>
-            <dt>To</dt><dd><b>{fmtNum(audience)}</b> {c.audience === 'all' ? 'subscribers (all lists)' : 'contacts'}{c.rules?.length ? ` (${c.rules.length} segment filter${c.rules.length > 1 ? 's' : ''})` : ''}</dd>
+            <dt>To</dt><dd><b>{fmtNum(audience)}</b> {c.audience === 'all' ? 'subscribers (all lists)' : c.audience === 'contacts' ? 'picked contacts' : 'contacts'}{c.rules?.length ? ` (${c.rules.length} segment filter${c.rules.length > 1 ? 's' : ''})` : ''}</dd>
             <dt>Subject</dt><dd>{c.subject}{c.abTest?.enabled && <div className="small">B: {c.abTest.subjectB} · test {fmtNum(testCount)} people, winner after {c.abTest.waitHours}h by {c.abTest.metric === 'clicks' ? 'click' : 'open'} rate</div>}</dd>
-            <dt>Speed</dt><dd>{sender ? `${sender.ratePerMinute}/min · max ${fmtNum(sender.dailyLimit)}/day` : '—'}{sender && audience > sender.dailyLimit && <div className="small text-amber">This audience is larger than the daily limit, so sending continues over {Math.ceil(audience / sender.dailyLimit)} days.</div>}</dd>
+            <dt>Speed</dt><dd>{sender ? `${c.delayMinutes > 0 ? `1 email every ${c.delayMinutes} min` : `${sender.ratePerMinute}/min`} · max ${fmtNum(sender.dailyLimit)}/day` : '—'}{sender && audience > sender.dailyLimit && <div className="small text-amber">This audience is larger than the daily limit, so sending continues over {Math.ceil(audience / sender.dailyLimit)} days.</div>}</dd>
             <dt>Content check</dt><dd>{check.score}/100{check.items.some((i) => i.level === 'fail') && <span className="small text-red"> · has issues, see the checklist</span>}</dd>
           </dl>
+          <Field label="Minutes between emails" hint={c.delayMinutes > 0 ? `One email every ${c.delayMinutes} min, so ${fmtNum(audience)} contacts take about ${fmtDuration(audience * c.delayMinutes)}.` : '0 = send as fast as the sender allows.'}>
+            <input type="number" min="0" max="1440" step="1" value={c.delayMinutes || 0} onChange={(e) => update({ delayMinutes: Math.min(1440, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} />
+          </Field>
           {c.status !== 'paused' && (
             <div className="send-mode">
               <label className={`radio-card ${sendMode === 'now' ? 'on' : ''}`}><input type="radio" checked={sendMode === 'now'} onChange={() => setSendMode('now')} /><div><b>Send now</b><div className="small muted">Starts immediately</div></div></label>

@@ -112,7 +112,7 @@ export default function CampaignReport() {
           <Link to="/campaigns" className="small muted back"><Icon name="arrowLeft" size={14} /> Campaigns</Link>
           <div className="row" style={{ gap: 10 }}><h1 className="truncate">{c.name}</h1><StatusBadge status={c.status} /></div>
           <p className="truncate">
-            “{c.subject}” · {c.sender?.fromEmail || 'no sender'} → {c.audience === 'all' ? 'all subscribers' : c.audience === 'list' ? c.list?.name || 'deleted list' : `${c.audience === 'non_openers' ? 'non-openers' : 'non-clickers'} of ${c.sourceCampaign?.name || 'a campaign'}`}
+            “{c.subject}” · {c.sender?.fromEmail || 'no sender'} → {c.audience === 'all' ? 'all subscribers' : c.audience === 'contacts' ? `${c.contacts?.length || 0} picked contact${c.contacts?.length === 1 ? '' : 's'}` : c.audience === 'list' ? c.list?.name || 'deleted list' : `${c.audience === 'non_openers' ? 'non-openers' : 'non-clickers'} of ${c.sourceCampaign?.name || 'a campaign'}`}
             {c.rules?.length > 0 && ` (${c.rules.length} filter${c.rules.length > 1 ? 's' : ''})`}
           </p>
         </div>
